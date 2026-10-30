@@ -1,10 +1,10 @@
-import type { Consent, Evidence, Host, LedgerEntry, Preferences, Quest, Verification, WorldEvent } from '@reorigin/domain'
+import type { Achievement, Consent, Evidence, Host, LedgerEntry, Preferences, Quest, SkillAssessment, Verification, WorldEvent } from '@reorigin/domain'
 
 /** A System message in the panel feed; one per source key. */
 export interface Notice {
   readonly id: string
   readonly hostId: string
-  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge'
+  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement'
   readonly title: string
   readonly body: string
   readonly createdAt: string
@@ -51,6 +51,9 @@ export type EventType =
   | 'memory.added.v1'
   | 'memory.forgotten.v1'
   | 'system.nudged.v1'
+  | 'skill.assessed.v1'
+  | 'achievement.unlocked.v1'
+  | 'host.title_equipped.v1'
 
 export interface StoredVerification extends Verification {
   readonly id: string
@@ -64,6 +67,7 @@ export interface StoredVerification extends Verification {
 export interface Transaction {
   getHost(): Host | undefined
   insertHost(host: Host): void
+  setHostTitle(hostId: string, titleKey: string | null): void
 
   getQuest(questId: string): Quest | undefined
   listQuests(hostId: string): Quest[]
@@ -116,6 +120,14 @@ export interface Transaction {
   insertMemory(memory: Memory): boolean
   listMemories(hostId: string, limit: number): Memory[]
   forgetMemory(hostId: string, memoryId: string, at: string): boolean
+
+  /** Assessments are append-only; a re-reading adds a row, and the latest row per skill is current. */
+  insertAssessment(assessment: SkillAssessment): void
+  latestAssessments(hostId: string): SkillAssessment[]
+
+  /** Insert unless the Host already holds this key; returns whether it was new. */
+  insertAchievement(achievement: Achievement): boolean
+  listAchievements(hostId: string): Achievement[]
 
   getCommandResult(commandId: string): unknown
   saveCommandResult(commandId: string, commandType: string, result: unknown, at: string): void

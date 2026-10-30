@@ -65,5 +65,17 @@ describe('prompt text', () => {
     expect(text).toContain('宿主：K；等级 Lv.1')
     expect(text).toContain('{{cwd}}') // passed through literally; the section registers with interpolate: false
     expect(text).toContain('待宿主审阅的 Agent 提议：0/3')
+    expect(text).not.toContain('技能评估')
+  })
+
+  it('states skill assessments with their tier, confidence, and scope', () => {
+    expect(PERSONA).toMatch(/不能宣布或许诺评估、成就或称号的变化/)
+    const text = formatBrief({
+      bound: true, displayName: 'K', goals: [], progress: { level: 3, xp: 300, intoLevel: 0, levelSpan: 300 }, chapter: '立足',
+      title: '立足者', skills: [{ skill: '测试工程', tier: '实践', confidence: '高', quests: 3 }],
+      openQuests: [], recentlyCompleted: [], memories: [], pendingAgentProposals: 0, limits: { maxXp: 200, maxPendingProposals: 3 },
+    })
+    expect(text).toContain('宿主：K（称号「立足者」）；等级 Lv.3')
+    expect(text).toContain('技能评估（仅限系统内经核验的记录）：测试工程 实践·置信度高（3 个任务）')
   })
 })

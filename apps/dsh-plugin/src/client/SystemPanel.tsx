@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import type { Dashboard, QuestView } from '@reorigin/application'
 import type { EvidenceKind, QuestType, WorldEvent } from '@reorigin/domain'
 import { RemoteFailure, type AgentStatus, type ReOriginClient } from './api.ts'
-import { Growth, Memories, Notices, Settings } from './Cards.tsx'
+import { Achievements, Growth, Memories, Notices, Settings } from './Cards.tsx'
 import { Awakening, LevelUp } from './Overlays.tsx'
 import { EVIDENCE_KIND, QUEST_TYPE, SOURCE, STATUS, describeReason, relativeTime, type Ctx, type Run } from './shared.ts'
 
@@ -120,6 +120,7 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
           <div className="ro-row">
             <span className="ro-level">Lv.{progress.level}</span>
             <span className="ro-muted ro-mono">XP {progress.xp}</span>
+            {dashboard.title !== null && <span className="ro-badge" data-tone="accent" data-testid="reorigin-title">「{dashboard.title.name}」</span>}
           </div>
           <span className="ro-muted">{host!.goals.length > 0 ? `主线目标：${host!.goals.join('；')}` : '尚未设定主线目标'}</span>
         </div>
@@ -141,6 +142,7 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
       {active.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} {...ctx} />)}
 
       <Growth dashboard={dashboard} />
+      <Achievements dashboard={dashboard} {...ctx} />
       <Memories dashboard={dashboard} {...ctx} />
 
       {closed.length > 0 && <p className="ro-section-title">历史（{closed.length}）</p>}

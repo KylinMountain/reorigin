@@ -1,7 +1,8 @@
-// Secondary panel cards: notices, growth tracks, memories, and System settings
+// Secondary panel cards: notices, skill assessments, achievements, memories, and System settings
 // (consented data sources and how proactive the System may be).
 import { useState, type FormEvent } from 'react'
 import type { Dashboard } from '@reorigin/application'
+import { CONFIDENCE_LABEL, SKILL_TIERS, tierLabel, type SkillTier } from '@reorigin/domain'
 import { setVoiceEnabled, voiceEnabled } from './Overlays.tsx'
 import { relativeTime, type Ctx } from './shared.ts'
 
@@ -30,17 +31,62 @@ export function Notices({ dashboard, run, busy, client, hostId }: { dashboard: D
 export function Growth({ dashboard }: { dashboard: Dashboard }) {
   if (dashboard.growth.length === 0) return null
   const max = Math.max(...dashboard.growth.map(track => track.completions))
+  const assessments = new Map(dashboard.skills.map(item => [item.skill, item]))
   return (
     <div className="ro-card" data-testid="reorigin-growth">
-      <p className="ro-section-title">成长轨迹</p>
-      <p className="ro-muted" style={{ margin: '4px 0 10px' }}>按任务标签统计「经核验完成」的次数，不代表技能熟练度评估。</p>
-      {dashboard.growth.map(track => (
-        <div key={track.skill} className="ro-track">
-          <span className="ro-track-name">{track.skill}</span>
-          <div className="ro-bar"><span style={{ width: `${(track.completions / max) * 100}%` }} /></div>
-          <span className="ro-muted ro-mono">×{track.completions} · {track.xp} XP</span>
-        </div>
-      ))}
+      <p className="ro-section-title">技能评估</p>
+      <p className="ro-muted" style={{ margin: '4px 0 10px' }}>
+        按成长标签、只依据经核验完成的任务计算（{dashboard.skills[0]?.ruleVersion ?? 'assessment-v1'}），与 XP 分开。置信度取决于证据中有多少由授权来源佐证。只反映系统内的记录，不代表系统外的能力。
+      </p>
+      {dashboard.growth.map(track => {
+        const assessment = assessments.get(track.skill)
+        return (
+          <div key={track.skill} className="ro-skill">
+            <div className="ro-track">
+              <span className="ro-track-name">{track.skill}</span>
+              <div className="ro-bar"><span style={{ width: `${(track.completions / max) * 100}%` }} /></div>
+              <span className="ro-muted ro-mono">×{track.completions} · {track.xp} XP</span>
+            </div>
+            {assessment === undefined
+              ? track.skill === '未分类' && <p className="ro-muted ro-skill-basis">未打标签的任务不参与技能评估。</p>
+              : (
+                <p className="ro-skill-basis">
+                  <span className="ro-badge" data-tone={assessment.tier >= 3 ? 'ok' : 'accent'}>{tierLabel(assessment.tier)}</span>
+                  <span className="ro-badge" data-tone={assessment.confidence === 'high' ? 'ok' : assessment.confidence === 'medium' ? 'warn' : 'muted'}>置信度{CONFIDENCE_LABEL[assessment.confidence]}</span>
+                  <span className="ro-muted">
+                    {assessment.basis.quests} 个任务 · {assessment.basis.activeDays} 个活跃日 · 跨度 {assessment.basis.spanDays} 天 · 佐证 {assessment.basis.corroborated}/{assessment.basis.evidence}
+                    {assessment.tier < 4 && ` · 下一级「${tierLabel((assessment.tier + 1) as SkillTier)}」：${SKILL_TIERS[assessment.tier]!.requirement}`}
+                  </span>
+                </p>
+              )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+export function Achievements({ dashboard, run, busy, client, hostId }: { dashboard: Dashboard } & Ctx) {
+  if (dashboard.achievements.length === 0) return null
+  const equipped = dashboard.title?.key ?? null
+  return (
+    <div className="ro-card" data-testid="reorigin-achievements">
+      <p className="ro-section-title">成就与称号（{dashboard.achievements.length}）</p>
+      <p className="ro-muted" style={{ margin: '4px 0 8px' }}>每一项都由确定性规则从经核验的记录中解锁，模型无法授予。称号可以佩戴在等级旁。</p>
+      <ul className="ro-feed">
+        {dashboard.achievements.map(item => (
+          <li key={item.id}>
+            <span className="ro-badge" data-tone={item.kind === 'title' ? 'accent' : 'ok'}>{item.kind === 'title' ? '称号' : '徽章'}</span>{' '}
+            <span className="ro-strong">{item.name}</span> <span className="ro-muted">{item.description} · {relativeTime(item.grantedAt)}</span>
+            {item.kind === 'title' && (
+              <button className="ro-link" disabled={busy} onClick={() => void run(
+                () => client.execute('EquipTitle', { titleKey: item.key === equipped ? null : item.key }, hostId),
+                item.key === equipped ? '已卸下称号。' : `已佩戴称号「${item.name}」。`,
+              )}>{item.key === equipped ? '卸下' : '佩戴'}</button>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

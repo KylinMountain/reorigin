@@ -94,6 +94,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ ...envelope, type: z.literal('AddMemory'), hostId: id, payload: z.object({ text: z.string().min(1).max(300) }) }),
   z.object({ ...envelope, type: z.literal('ForgetMemory'), hostId: id, payload: z.object({ memoryId: id }) }),
   z.object({ ...envelope, type: z.literal('MarkNoticesRead'), hostId: id, payload: z.object({}) }),
+  /** Display an unlocked title, or none with null. */
+  z.object({ ...envelope, type: z.literal('EquipTitle'), hostId: id, payload: z.object({ titleKey: z.string().min(1).max(80).nullable() }) }),
 ])
 
 export type Command = z.infer<typeof commandSchema>
@@ -123,4 +125,5 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   AddMemory: ['host'],
   ForgetMemory: ['host'],
   MarkNoticesRead: ['host'],
+  EquipTitle: ['host'],
 }

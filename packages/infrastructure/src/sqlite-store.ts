@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { ApplicationError, type Memory, type Notice, type StoredEvent, type StoredVerification, type Store, type Transaction } from '@reorigin/application'
-import { DEFAULT_PREFERENCES, type Consent, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type WorldEvent } from '@reorigin/domain'
+import { DEFAULT_PREFERENCES, type Achievement, type Consent, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type SkillAssessment, type WorldEvent } from '@reorigin/domain'
 import { migrate } from './migrations.ts'
 
 type Row = Record<string, SQLInputValue>
@@ -207,6 +207,32 @@ function createTransaction(db: DatabaseSync): Transaction {
       return run('UPDATE memories SET forgotten_at = ? WHERE id = ? AND host_id = ? AND forgotten_at IS NULL', at, memoryId, hostId) === 1
     },
 
+    setHostTitle(hostId, titleKey) {
+      run('UPDATE hosts SET title_key = ? WHERE id = ?', titleKey, hostId)
+    },
+
+    insertAssessment(assessment) {
+      run(`INSERT INTO skill_assessments (id, host_id, skill, tier, confidence, rule_version, basis_json, quest_ids_json, evidence_ids_json, assessed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      assessment.id, assessment.hostId, assessment.skill, assessment.tier, assessment.confidence, assessment.ruleVersion,
+      JSON.stringify(assessment.basis), JSON.stringify(assessment.questIds), JSON.stringify(assessment.evidenceIds), assessment.assessedAt)
+    },
+    latestAssessments(hostId) {
+      return all(`SELECT * FROM skill_assessments s
+                  WHERE s.host_id = ? AND s.rowid = (SELECT MAX(rowid) FROM skill_assessments t WHERE t.host_id = s.host_id AND t.skill = s.skill)
+                  ORDER BY s.tier DESC, s.skill`, hostId).map(toAssessment)
+    },
+
+    insertAchievement(achievement) {
+      return run(`INSERT INTO achievements (id, host_id, key, kind, name, description, rule_version, cause_ref, granted_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (host_id, key) DO NOTHING`,
+      achievement.id, achievement.hostId, achievement.key, achievement.kind, achievement.name, achievement.description,
+      achievement.ruleVersion, achievement.causeRef, achievement.grantedAt) === 1
+    },
+    listAchievements(hostId) {
+      return all('SELECT * FROM achievements WHERE host_id = ? ORDER BY granted_at, rowid', hostId).map(toAchievement)
+    },
+
     getCommandResult(commandId) {
       const row = one('SELECT result_json FROM processed_commands WHERE command_id = ?', commandId)
       return row === undefined ? undefined : JSON.parse(String(row.result_json))
@@ -228,7 +254,10 @@ const text = (value: SQLInputValue | undefined): string => String(value)
 const nullableText = (value: SQLInputValue | undefined): string | null => value === null || value === undefined ? null : String(value)
 
 function toHost(row: Row): Host {
-  return { id: text(row.id), displayName: text(row.display_name), goals: JSON.parse(text(row.goals_json)), boundAt: text(row.bound_at) }
+  return {
+    id: text(row.id), displayName: text(row.display_name), goals: JSON.parse(text(row.goals_json)), boundAt: text(row.bound_at),
+    titleKey: nullableText(row.title_key),
+  }
 }
 
 function toQuest(row: Row): Quest {
@@ -342,6 +371,35 @@ function toMemory(row: Row): Memory {
     sourceRef: nullableText(row.source_ref),
     createdAt: text(row.created_at),
     forgottenAt: nullableText(row.forgotten_at),
+  }
+}
+
+function toAssessment(row: Row): SkillAssessment {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    skill: text(row.skill),
+    tier: Number(row.tier) as SkillAssessment['tier'],
+    confidence: text(row.confidence) as SkillAssessment['confidence'],
+    ruleVersion: text(row.rule_version),
+    basis: JSON.parse(text(row.basis_json)),
+    questIds: JSON.parse(text(row.quest_ids_json)),
+    evidenceIds: JSON.parse(text(row.evidence_ids_json)),
+    assessedAt: text(row.assessed_at),
+  }
+}
+
+function toAchievement(row: Row): Achievement {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    key: text(row.key),
+    kind: text(row.kind) as Achievement['kind'],
+    name: text(row.name),
+    description: text(row.description),
+    ruleVersion: text(row.rule_version),
+    causeRef: nullableText(row.cause_ref),
+    grantedAt: text(row.granted_at),
   }
 }
 

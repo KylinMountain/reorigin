@@ -9,6 +9,7 @@ export type ApplicationErrorCode =
   | 'consent/inactive'
   | 'consent/duplicate'
   | 'memory/not-found'
+  | 'title/locked'
   | 'host/not-bound'
   | 'host/already-bound'
   | 'quest/not-found'

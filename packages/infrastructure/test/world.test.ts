@@ -155,7 +155,7 @@ describe('outbox, notices, and memory (P2/P4)', () => {
     app.tick()
     app.tick()
     const dashboard = app.dashboard()
-    expect(dashboard.notices.map(notice => notice.kind).sort()).toEqual(['level_up', 'reward'])
+    expect(dashboard.notices.map(notice => notice.kind).sort()).toEqual(['achievement', 'level_up', 'reward', 'skill'])
     expect(dashboard.notices.find(notice => notice.kind === 'level_up')!.title).toBe('【升级】Lv.2')
     expect(dashboard.memories).toEqual([expect.objectContaining({ kind: 'milestone', text: '完成了「q」（测试工程）' })])
     expect(dashboard.growth).toEqual([{ skill: '测试工程', completions: 1, xp: 120, lastCompletedAt: expect.any(String) }])

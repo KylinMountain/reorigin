@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto'
 import {
+  ACHIEVEMENT_RULE_VERSION,
+  CONFIDENCE_LABEL,
+  assessSkill,
   attachEvidence,
   bindHost,
   chapterFor,
   detectOpportunities,
+  evaluateAchievements,
   expiryTarget,
   filterCommit,
   inQuietHours,
@@ -11,9 +15,12 @@ import {
   levelForXp,
   proposeQuest,
   recordEvidence,
+  sameReading,
   settleQuest,
+  tierLabel,
   transition,
   verifyQuest,
+  type Achievement,
   type Chapter,
   type Consent,
   type Evidence,
@@ -23,6 +30,9 @@ import {
   type Preferences,
   type Quest,
   type QuestStatus,
+  type SkillAssessment,
+  type SkillBasis,
+  type SkillRecord,
   type WorldEvent,
 } from '@reorigin/domain'
 import { AGENT_MAX_PENDING_PROPOSALS, AGENT_MAX_XP, ALLOWED_ACTORS, commandSchema, type Command } from './commands.ts'
@@ -39,7 +49,7 @@ export interface QuestView extends Quest {
   readonly settled: boolean
 }
 
-/** Completed quests grouped by their growth-track tag. A count of verified completions, not a proficiency score. */
+/** Completed quests grouped by their growth-track tag. A count of verified completions; the assessment lives in `skills`. */
 export interface GrowthTrack {
   readonly skill: string
   readonly completions: number
@@ -57,6 +67,12 @@ export interface Dashboard {
   readonly unreadNotices: number
   readonly memories: readonly Memory[]
   readonly growth: readonly GrowthTrack[]
+  /** Latest evidence-based assessment per growth tag. */
+  readonly skills: readonly SkillAssessment[]
+  /** Badges and titles in the order they were unlocked. */
+  readonly achievements: readonly Achievement[]
+  /** The title the Host chose to display. */
+  readonly title: Achievement | null
   readonly consents: readonly Consent[]
   readonly preferences: Preferences | null
   /** Recently collected commits, offered as corroborated evidence. */
@@ -71,6 +87,8 @@ export type AgentBrief =
     readonly goals: readonly string[]
     readonly progress: LevelProgress
     readonly chapter: string
+    readonly title: string | null
+    readonly skills: readonly { skill: string, tier: string, confidence: string, quests: number }[]
     readonly openQuests: readonly { title: string, type: Quest['type'], status: QuestStatus, source: Quest['source'] }[]
     readonly recentlyCompleted: readonly string[]
     readonly memories: readonly string[]
@@ -80,7 +98,7 @@ export type AgentBrief =
 
 /** What one command returns on success; the same value is replayed for a repeated `commandId`. */
 export type CommandOutcome =
-  | { readonly type: 'BindHost', readonly host: Host }
+  | { readonly type: 'BindHost' | 'EquipTitle', readonly host: Host }
   | { readonly type: 'ProposeQuest' | 'AcceptQuest' | 'CancelQuest' | 'SubmitQuestEvidence', readonly quest: Quest }
   | { readonly type: 'VerifyQuest', readonly quest: Quest, readonly verification: StoredVerification }
   | { readonly type: 'SettleQuest', readonly entry: LedgerEntry, readonly granted: boolean }
@@ -93,6 +111,8 @@ export interface TickReport {
   readonly expired: number
   readonly proposed: number
   readonly nudged: number
+  readonly assessed: number
+  readonly unlocked: number
   readonly dispatched: number
 }
 
@@ -142,7 +162,7 @@ export class ReOriginApp {
       if (host === null) {
         return {
           host, progress: levelForXp(0), chapter: chapterFor(1), quests: [], ledger: [], notices: [], unreadNotices: 0,
-          memories: [], growth: [], consents: [], preferences: null, recentCommits: [],
+          memories: [], growth: [], skills: [], achievements: [], title: null, consents: [], preferences: null, recentCommits: [],
         }
       }
       const ledger = tx.listLedger(host.id, 50)
@@ -155,6 +175,7 @@ export class ReOriginApp {
       }))
       const progress = levelForXp(tx.totalXp(host.id))
       const notices = tx.listNotices(host.id, 20)
+      const achievements = tx.listAchievements(host.id)
       return {
         host,
         progress,
@@ -165,6 +186,9 @@ export class ReOriginApp {
         unreadNotices: notices.filter(notice => notice.readAt === null).length,
         memories: tx.listMemories(host.id, 30),
         growth: growthTracks(allQuests, ledger),
+        skills: tx.latestAssessments(host.id),
+        achievements,
+        title: achievements.find(item => item.kind === 'title' && item.key === host.titleKey) ?? null,
         consents: tx.listConsents(host.id),
         preferences: tx.getPreferences(host.id),
         recentCommits: tx.listWorldEvents(host.id, new Date(Date.parse(this.clock.now()) - 14 * DAY).toISOString()).slice(0, 20),
@@ -190,6 +214,10 @@ export class ReOriginApp {
         goals: host.goals,
         progress,
         chapter: chapterFor(progress.level).title,
+        title: host.titleKey === null ? null : tx.listAchievements(host.id).find(item => item.key === host.titleKey)?.name ?? null,
+        skills: tx.latestAssessments(host.id).map(item => ({
+          skill: item.skill, tier: tierLabel(item.tier), confidence: CONFIDENCE_LABEL[item.confidence], quests: item.basis.quests,
+        })),
         openQuests: open.map(quest => ({ title: quest.title, type: quest.type, status: quest.status, source: quest.source })),
         recentlyCompleted: quests.filter(quest => quest.status === 'COMPLETED').slice(0, 5).map(quest => quest.title),
         memories: tx.listMemories(host.id, 8).map(memory => memory.text),
@@ -262,6 +290,7 @@ export class ReOriginApp {
       const host = tx.getHost()
       let proposed = 0
       let nudged = 0
+      let growth = { assessed: 0, unlocked: 0 }
       if (host !== undefined) {
         const preferences = tx.getPreferences(host.id)
         if (!inQuietHours(this.clock.localHour(now), preferences)) {
@@ -304,8 +333,10 @@ export class ReOriginApp {
             }
           }
         }
+        // Growth answers the Host's own settlements, so quiet hours do not hold it back.
+        growth = this.advanceGrowth(tx, host, now)
       }
-      return { expired, proposed, nudged, dispatched: this.dispatchOutbox(tx, now) }
+      return { expired, proposed, nudged, ...growth, dispatched: this.dispatchOutbox(tx, now) }
     })
   }
 
@@ -340,6 +371,69 @@ export class ReOriginApp {
       count += 1
     }
     return count
+  }
+
+  /**
+   * Growth Engine and achievements. Re-read every growth tag from verified
+   * completions, store the readings that changed, then grant whatever the
+   * catalog now allows. Both are keyed, so running it again is a no-op.
+   */
+  private advanceGrowth(tx: Transaction, host: Host, now: string): { assessed: number, unlocked: number } {
+    const localDay = (iso: string): string => this.clock.localDay(iso)
+    const records: (SkillRecord & { skill: string })[] = tx.listQuests(host.id)
+      .filter(quest => quest.status === 'COMPLETED')
+      .map(quest => {
+        const verification = tx.latestVerification(quest.id)
+        const evidence = verification?.verdict === 'pass' ? tx.getEvidence(verification.acceptedEvidenceIds) : []
+        return {
+          questId: quest.id,
+          type: quest.type,
+          skill: quest.skill,
+          completedAt: quest.closedAt ?? now,
+          evidence: evidence.map(item => ({ id: item.id, corroborated: item.corroboratedBy !== null })),
+        }
+      })
+      .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+
+    const latest = new Map(tx.latestAssessments(host.id).map(item => [item.skill, item]))
+    const bySkill = new Map<string, SkillRecord[]>()
+    for (const record of records) {
+      if (record.skill !== '') bySkill.set(record.skill, [...bySkill.get(record.skill) ?? [], record])
+    }
+    let assessed = 0
+    for (const [skill, list] of bySkill) {
+      const reading = assessSkill(skill, list, localDay)
+      const previous = latest.get(skill)
+      if (reading === null || sameReading(previous, reading)) continue
+      const assessment: SkillAssessment = { ...reading, id: this.ids.next('ska'), hostId: host.id, assessedAt: now }
+      tx.insertAssessment(assessment)
+      latest.set(skill, assessment)
+      this.emit(tx, 'skill.assessed.v1', assessment.id, {
+        skill, tier: assessment.tier, confidence: assessment.confidence, basis: assessment.basis,
+        previousTier: previous?.tier ?? null, previousConfidence: previous?.confidence ?? null,
+      }, 'system:growth')
+      assessed += 1
+    }
+
+    const unlocks = evaluateAchievements({
+      completed: records.map(record => ({
+        questId: record.questId, type: record.type, completedAt: record.completedAt,
+        corroborated: record.evidence.length > 0 && record.evidence.every(item => item.corroborated),
+      })),
+      level: levelForXp(tx.totalXp(host.id)).level,
+      skills: [...latest.values()].map(item => ({ skill: item.skill, tier: item.tier })),
+      localDay,
+    })
+    const held = new Set(tx.listAchievements(host.id).map(item => item.key))
+    let unlocked = 0
+    for (const unlock of unlocks) {
+      if (held.has(unlock.key)) continue
+      const achievement: Achievement = { ...unlock, id: this.ids.next('ach'), hostId: host.id, ruleVersion: ACHIEVEMENT_RULE_VERSION, grantedAt: now }
+      if (!tx.insertAchievement(achievement)) continue
+      this.emit(tx, 'achievement.unlocked.v1', achievement.id, { key: unlock.key, kind: unlock.kind, name: unlock.name, description: unlock.description }, 'system:growth')
+      unlocked += 1
+    }
+    return { assessed, unlocked }
   }
 
   /** Outbox consumer: turn audit events into Host-facing notices and milestone memories. Keyed, so redelivery is harmless. */
@@ -383,6 +477,21 @@ export class ReOriginApp {
         notice('proposal', payload.source === 'system' ? '【隐藏任务出现】' : '【Agent 提议】', `「${title}」等待你审阅。`, `proposal:${event.aggregateId}`)
         return
       }
+      case 'skill.assessed.v1': {
+        // A larger basis with the same tier and confidence is recorded, but not worth a message.
+        if (payload.tier === payload.previousTier && payload.confidence === payload.previousConfidence) return
+        const basis = payload.basis as SkillBasis
+        const tier = tierLabel(payload.tier as SkillAssessment['tier'])
+        notice('skill', `【技能评估】${String(payload.skill)} · ${tier}`,
+          `置信度${CONFIDENCE_LABEL[payload.confidence as SkillAssessment['confidence']]}。依据：${basis.quests} 个经核验任务、${basis.activeDays} 个活跃日、跨度 ${basis.spanDays} 天；`
+          + `${basis.corroborated}/${basis.evidence} 份证据由授权来源佐证。只反映系统内的记录，不代表系统外的能力。`,
+          `skill:${event.aggregateId}`)
+        return
+      }
+      case 'achievement.unlocked.v1':
+        notice('achievement', payload.kind === 'title' ? `【称号获得】${String(payload.name)}` : `【成就解锁】${String(payload.name)}`,
+          `${String(payload.description)}。`, `achievement:${String(payload.key)}`)
+        return
       case 'quest.transitioned.v1':
         if (payload.to === 'EXPIRED') notice('expired', '【任务过期】', `「${tx.getQuest(event.aggregateId)?.title ?? '任务'}」已超过期限。`, `expired:${event.aggregateId}`)
         return
@@ -481,6 +590,15 @@ export class ReOriginApp {
       case 'MarkNoticesRead':
         tx.markNoticesRead(host.id, at)
         return { type: 'MarkNoticesRead', done: true }
+      case 'EquipTitle': {
+        const { titleKey } = command.payload
+        if (titleKey !== null && !tx.listAchievements(host.id).some(item => item.kind === 'title' && item.key === titleKey)) {
+          throw new ApplicationError('title/locked', `title ${titleKey} is not unlocked`)
+        }
+        tx.setHostTitle(host.id, titleKey)
+        emit('host.title_equipped.v1', host.id, { titleKey })
+        return { type: 'EquipTitle', host: { ...host, titleKey } }
+      }
       default:
     }
 

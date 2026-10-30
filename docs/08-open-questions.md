@@ -4,9 +4,9 @@
 |---|---|---|
 | DSH Desktop 第三方 UI 插件 | 运行验证（开发构建，`ce7073d`）：应用内安装、启用、冷重启通过 | 在打包签名版 Desktop 上复测 |
 | 插件 Manifest | 运行验证（`dsh.bundle` + `dsh.client` 单包两半） | 随 DSH 版本升级复测 |
-| Host/Client RPC | 待验证 | P1 前用最小 Remote 打通 Domain Core |
-| 浏览器 bundle 构建 | 格式已实测，但 DSH 构建预设未发布 | 自建等价构建步骤并锁定 DSH 版本 |
-| 默认打开 Re:Origin 面板 | 待验证（当前落在「新会话」） | 实测 `ctx.layout.selectPanel` 启动时调用 |
+| Host/Client RPC | 运行验证（Web，SRC 回退 + `connection.rpc`）；无 Schema 校验 | Application 层自行校验命令入参；Desktop 复测 |
+| 浏览器 bundle 构建 | 格式已实测，但 DSH 构建预设未发布 | P1 自建等价构建步骤并锁定 DSH 版本 |
+| 默认打开 Re:Origin 面板 | 运行验证（Web，`main` 注册后 `selectPanel` 一次） | Desktop 复测 |
 | 多设备同步/冲突 | MVP 不支持 | 后续单独 ADR |
 | 真实技能评估 | 不存在通用客观标尺 | 定义领域化证据、置信度与申诉 |
 | 名称商标/域名 | 尚未正式核查 | 发布前检索与法律评审 |

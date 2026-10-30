@@ -11,8 +11,8 @@ describes the package and how to reproduce the run.
 |---|---|
 | `package.json` | Declares `dsh.bundle` (the patch layer) and `dsh.client` (the browser half) in one package. |
 | `cordis.patch.yml` | Inserts a single Loader row `reorigin` → `dsh-plugin-reorigin`. |
-| `host.js` | Host half; logs load/dispose to prove lifecycle. |
-| `client.js` | Browser half, hand-written in DSH's `window.__ModuleLoader__.load({ id, factory })` closure format. Registers `sidebar.panellist` id `reorigin` and the keyed `main` panel `reorigin`. |
+| `host.js` | Host half: a Cordis service bound to the `reorigin` Remote namespace through DSH's SRC fallback (`getState`, `recordCheck`), persisting to `$DSH_HOME/reorigin/p0-state.json`. |
+| `client.js` | Browser half, hand-written in DSH's `window.__ModuleLoader__.load({ id, factory })` closure format. Registers `sidebar.panellist` id `reorigin` and the keyed `main` panel `reorigin`, selects that panel once per page load, and calls the Host over `ctx.connection.rpc`. |
 
 No build step: both halves are plain JavaScript. `react` comes from the
 injected `require`, which only answers DSH's platform module table.

@@ -17,8 +17,21 @@ function ReOriginIcon({ size }) {
     h('circle', { cx: 12, cy: 12, r: 1.6, fill: 'currentColor' }))
 }
 
+// Set in apply(): the page calls the Host's SRC Remote endpoints over the raw
+// Connection RPC, because no generated `ctx.remote.reorigin` contribution exists.
+let rpc = null
+
+async function call(method, args) {
+  const result = await rpc.call('/api', `reorigin/${method}`, { args })
+  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+  return result.value
+}
+
 function ReOriginPage() {
-  const [ticks, setTicks] = React.useState(0)
+  const [state, setState] = React.useState(null)
+  const [error, setError] = React.useState(null)
+  React.useEffect(() => { call('getState', {}).then(setState, e => setError(String(e))) }, [])
+  const record = () => call('recordCheck', { note: 'clicked in P0 panel' }).then(setState, e => setError(String(e)))
   return h('div', {
     'data-testid': 'reorigin-panel',
     style: { padding: '48px 40px', fontFamily: 'ui-monospace, Menlo, monospace', color: 'inherit', height: '100%', overflow: 'auto' },
@@ -29,17 +42,30 @@ function ReOriginPage() {
     h('button', {
       type: 'button',
       'data-testid': 'reorigin-tick',
-      onClick: () => setTicks(n => n + 1),
+      onClick: record,
       style: { padding: '6px 14px', border: '1px solid currentColor', borderRadius: 6, background: 'transparent', color: 'inherit', cursor: 'pointer' },
-    }, `交互检查 · ${ticks}`))
+    }, `交互检查 · ${state === null ? '…' : state.checks}`),
+    h('p', { 'data-testid': 'reorigin-rpc', style: { fontSize: 12, opacity: 0.6, marginTop: 16 } },
+      error ?? (state?.updatedAt ? `Host 已记录 · ${state.updatedAt}` : 'Host 状态：尚无记录')))
 }
 
 exports.name = 'reorigin'
-exports.inject = ['slots', 'layout']
+exports.inject = ['slots', 'layout', 'connection']
 
 exports.apply = function apply(ctx) {
   console.log('[reorigin] client half loaded')
-  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID }, ReOriginPage))
+  rpc = ctx.connection.rpc
+  ctx.slots.inject('main', () => {
+    const dispose = ctx.slots.register({ name: 'main', key: PANEL_ID }, ReOriginPage)
+    // Default landing: select the panel once per page load, after the key exists
+    // (selectPanel throws for an unregistered key). Re-enabling the plugin later
+    // in the same page must not steal focus, hence the window-level flag.
+    if (!window.__reoriginLanded) {
+      window.__reoriginLanded = true
+      ctx.layout.selectPanel(PANEL_ID)
+    }
+    return dispose
+  })
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
     name: 'sidebar.panellist',
     id: PANEL_ID,

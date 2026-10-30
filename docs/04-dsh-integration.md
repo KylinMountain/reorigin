@@ -32,14 +32,15 @@ Re:Origin 需要 Agent、模型配置、会话、MCP 和插件生态，但这些
 - [x] 验证应用重启、插件禁用/启用/卸载/重新安装。（插件源码热重载未测）
 - [x] 验证 DSH Web 与 Desktop（开发模式）冷启动。
 - [x] 验证原生插件管理、模型和会话入口不受损。
-- [ ] 验证 Host/Client RPC 契约、构建、打包、发布路径。
-- [ ] 验证能否默认启动进入 Re:Origin 面板；不能则明确降级体验。
+- [x] 验证 Host/Client RPC 契约（SRC 回退路径，见下）。
+- [ ] 验证 Client 构建、打包、发布路径。
+- [x] 验证能否默认启动进入 Re:Origin 面板。
 
 **判定**：P0 通过后才能将插件接口与发布流程固化为实现规范。未通过时重新评审 UI 集成方案，不直接假定 Fork 是唯一解。
 
 ## P0 运行验证记录（2026-10-30）
 
-**结论**：「Re:Origin 作为 DSH 原生插件提供独立侧栏入口 + 完整主工作区」在 Web 与 Desktop（开发构建）上**运行验证通过**，不需要 Fork DSH。RPC、打包发布、默认落地页仍为**待验证**。
+**结论**：「Re:Origin 作为 DSH 原生插件提供独立侧栏入口 + 完整主工作区」在 Web 与 Desktop（开发构建）上**运行验证通过**，不需要 Fork DSH。Host/Client RPC 与默认落地在 Web 上运行验证通过；Client 构建与打包发布仍为**待验证**。
 
 样例插件与复现步骤：[`spikes/p0-dsh-plugin`](../spikes/p0-dsh-plugin/README.md)。
 
@@ -74,11 +75,23 @@ Re:Origin 需要 Agent、模型配置、会话、MCP 和插件生态，但这些
 - **Desktop 插件管理**：运行中走应用内插件页（与 Web 共用插件管理器）；CLI 只能在 Desktop 退出后用 Desktop 自带的 `dsh` 命令修改其 profile。
 - **网络**：在 HTTP 代理后需 `NODE_USE_ENV_PROXY=1`（corepack/Node fetch 不读 `HTTPS_PROXY`）；Desktop 首次启动需下载锁定的 Node/Python 运行时，`nodejs.org` 不可达时可用镜像文件按 sha256 预置到 `apps/desktop/.desktop-build/downloads/`。
 
+### Host/Client RPC（运行验证，Web）
+
+DSH 的 `ctx.remote.<namespace>` 依赖仓库内 typert 生成器产出的 `typert.host.js` / `typert.remote-client.js`，仓库外插件拿不到。但 Gateway 对没有严格定义的端点**无条件**走 SRC 回退：扫描带 `typertRemote` 绑定与方法标记的 Cordis 服务。因此：
+
+- **Host**：一个 Cordis `Service`，构造时 `bindTypertRemote(this, 'reorigin', { namespace: 'reorigin' })`，并在原型上写入 `@Remote` 本会写的版本化描述（键 `@deepseek-ai/dsh-typert-protocol/remote-methods`，`{ version: 1, methods: [{ method, invocation: { kind: 'direct' } }] }`）。用 TypeScript 编写时直接用 `@Remote` 装饰器即可。`@deepseek-ai/cordis`、`@deepseek-ai/dsh-typert-protocol` 声明为 `peerDependencies`，运行时解析到 DSH 安装自带的副本。
+- **Client**：`inject` 加 `connection`，调用 `ctx.connection.rpc.call('/api', 'reorigin/<method>', { args: { ... } })`，返回 `{ ok, value } | { ok: false, error: { code, message } }`。参数按**参数名**匹配。
+- **代价**：SRC 只校验 JSON 安全性，不做 Schema 校验——Re:Origin 的命令必须在自己的 Application 层用 Schema 校验入参（ADR-002 要求经 Application 命令接入，本来就要做）。
+- 实测：`getState` / `recordCheck` 往返成功，Host 把状态写到 `$DSH_HOME/reorigin/`，Host 冷重启后读回。
+
+### 默认落地（运行验证，Web）
+
+`ctx.layout.selectPanel(id)` 只改内存中的选中状态，没有持久化；对未注册的 key 会抛错。在 `main` 注册之后调用一次（每次页面加载一次，重新启用插件时不抢焦点），冷启动即落在 Re:Origin，几秒后未被会话恢复抢回；点「新会话」正常切回对话。
+
 ### 仍待验证
 
-- Host/Client RPC（`ctx.remote` / typert Remote）与 Re:Origin Domain Core 的接线。
-- 正式构建与分发：npm 包 / `pnpm pack` tarball / GitHub `prepare` 构建三选一；`engines.dsh` 兼容范围策略。
-- **打包签名版 Desktop**（运行时 profile 解析，不走开发构建的链接）上的安装与启动。
-- 默认启动直接进入 Re:Origin 面板（当前落在「新会话」页；`ctx.layout.selectPanel` 可切换，但是否适合在启动时调用、是否被持久化覆盖未测）。
+- 正式 Client 构建：用自有构建步骤产出 `__ModuleLoader__` 格式（P1 `apps/dsh-plugin`）。
+- 分发：npm 包 / `pnpm pack` tarball / GitHub `prepare` 构建三选一；`engines.dsh` 兼容范围策略。
+- **打包签名版 Desktop**（运行时 profile 解析，不走开发构建的链接）上的安装与启动；Desktop 上的 RPC 与默认落地。
 - 插件源码修改后的热重载开发体验。
 - `conversation.content` Factory 内嵌对话。

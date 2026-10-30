@@ -4,6 +4,7 @@ export type ApplicationErrorCode =
   | DomainErrorCode
   | 'command/invalid'
   | 'command/forbidden'
+  | 'policy/agent-limit'
   | 'host/not-bound'
   | 'host/already-bound'
   | 'quest/not-found'

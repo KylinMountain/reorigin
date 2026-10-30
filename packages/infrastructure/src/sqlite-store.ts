@@ -62,8 +62,8 @@ function createTransaction(db: DatabaseSync): Transaction {
     },
     insertQuest(quest) {
       run(`INSERT INTO quests (id, host_id, type, source, title, objective, criteria_json, reward_rule_version, reward_xp,
-             status, revision, proposed_at, accepted_at, closed_at, evidence_ids_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             status, revision, proposed_at, accepted_at, closed_at, evidence_ids_json, rationale)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ...questColumns(quest))
     },
     updateQuest(quest, expectedRevision) {
@@ -138,7 +138,7 @@ function createTransaction(db: DatabaseSync): Transaction {
 function questColumns(quest: Quest): SQLInputValue[] {
   return [quest.id, quest.hostId, quest.type, quest.source, quest.title, quest.objective, JSON.stringify(quest.criteria),
     quest.reward.ruleVersion, quest.reward.xp, quest.status, quest.revision, quest.proposedAt, quest.acceptedAt,
-    quest.closedAt, JSON.stringify(quest.evidenceIds)]
+    quest.closedAt, JSON.stringify(quest.evidenceIds), quest.rationale]
 }
 
 const text = (value: SQLInputValue | undefined): string => String(value)
@@ -156,6 +156,7 @@ function toQuest(row: Row): Quest {
     source: text(row.source) as Quest['source'],
     title: text(row.title),
     objective: text(row.objective),
+    rationale: text(row.rationale),
     criteria: JSON.parse(text(row.criteria_json)),
     reward: { ruleVersion: text(row.reward_rule_version), xp: Number(row.reward_xp) },
     status: text(row.status) as Quest['status'],

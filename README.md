@@ -11,7 +11,7 @@
 | `packages/domain` | Pure domain: Host, Quest state machine, Evidence, deterministic verifier, reward ledger rules. No DSH, React, or model SDK. |
 | `packages/application` | Commands (zod-validated), actor rules, idempotent replay, Store/Clock/Id ports. The only way state changes. |
 | `packages/infrastructure` | `node:sqlite` (WAL) Store with migrations, append-only audit events, outbox. |
-| `apps/dsh-plugin` | DSH bundle: Host service (`reorigin` Remote namespace) + React workspace; `scripts/build.ts` emits `dist/`. |
+| `apps/dsh-plugin` | DSH bundle: Host service (`reorigin` Remote namespace), the agent tool `reorigin_propose_quest` and System persona, React workspace; `scripts/build.ts` emits `dist/`. |
 | `spikes/p0-dsh-plugin` | The P0 feasibility spike, kept for reference. |
 
 ## Develop

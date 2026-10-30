@@ -1,5 +1,8 @@
 import type { CommandOutcome, CommandType, Dashboard, Result } from '@reorigin/application'
+import type { AgentStatus } from '../host/agent.ts'
 import { REMOTE_NAMESPACE, type RemoteMethod } from '../shared/remote.ts'
+
+export type { AgentStatus }
 
 /** DSH's Connection RPC as the browser half sees it (`ctx.connection.rpc`). */
 export interface Rpc {
@@ -26,6 +29,10 @@ export class ReOriginClient {
 
   async dashboard(): Promise<Dashboard> {
     return await this.call('dashboard', {}) as Dashboard
+  }
+
+  async agentStatus(): Promise<AgentStatus> {
+    return await this.call('agentStatus', {}) as AgentStatus
   }
 
   /** Send one command; the Host fills in `actor`. Throws RemoteFailure for transport or domain refusals. */

@@ -97,6 +97,13 @@ DSH 的 `ctx.remote.<namespace>` 依赖仓库内 typert 生成器产出的 `type
 - 实测：Web 上完整走通 P1 闭环；Desktop 开发构建中 `node:sqlite`（Electron 内置 Node）读写正常、RPC 正常（[截图](assets/p1/desktop-system-panel.png)）。
 - **升级方式**：已安装同名插件时，原生「添加插件」会提示先卸载再重装；第三方插件目前没有原地升级。
 
+### Agent 集成（加载已验证，Web）
+
+- 在服务内挂一个 `inject: ['tools', 'systemPrompt']` 的子插件：没有 Agent 平面的组合里它不会挂载，服务本身照常工作。
+- Web 应用把内置工具行移到 Agent 预设里，但工具注册表是「全局层 + 预设层」合并，Host 平面插件注册到全局层的工具每个会话都可见。
+- `ctx.systemPrompt.section` 放静态人格，`ctx.systemPrompt.context` 放每步变化的事实；两者的文本回调是同步的，正好匹配同步的 `node:sqlite` 读取。用户输入会进入其中，务必 `interpolate: false`。
+- DSH 没有不调模型就能查看组装后 prompt 的入口，所以「进入会话 prompt」只能用真实对话验证。
+
 ### 仍待验证
 
 - 分发：npm 包 / `pnpm pack` tarball / GitHub `prepare` 构建三选一；`engines.dsh` 兼容范围策略。

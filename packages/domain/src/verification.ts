@@ -1,4 +1,4 @@
-import type { Evidence } from './evidence.ts'
+import type { Evidence, EvidenceKind } from './evidence.ts'
 import type { Quest } from './quest.ts'
 
 /** Bump when the rules below change; stored with every verdict. */
@@ -6,14 +6,19 @@ export const VERIFIER_RULE_VERSION = 'deterministic-v1'
 
 export type Verdict = 'pass' | 'needs_evidence' | 'reject'
 
+/** Why an item was excluded or a criterion failed. Structured so each surface words it in its own language. */
+export type VerificationReason =
+  | { readonly code: 'other_host' | 'before_acceptance' | 'reused' | 'unattested', readonly evidenceId: string }
+  | { readonly code: 'criterion_unmet', readonly description: string, readonly kind: EvidenceKind, readonly count: number, readonly required: number }
+
 export interface Verification {
   readonly questId: string
   readonly verdict: Verdict
   readonly ruleVersion: string
   /** Evidence that counted towards the criteria. */
   readonly acceptedEvidenceIds: readonly string[]
-  /** Human-readable reasons, one per excluded item or unmet criterion. */
-  readonly reasons: readonly string[]
+  /** One reason per excluded item or unmet criterion. */
+  readonly reasons: readonly VerificationReason[]
 }
 
 /**
@@ -23,7 +28,7 @@ export interface Verification {
  * @param usedElsewhere - content hashes already counted by another completed quest of this Host.
  */
 export function verifyQuest(quest: Quest, evidence: readonly Evidence[], usedElsewhere: ReadonlySet<string>): Verification {
-  const reasons: string[] = []
+  const reasons: VerificationReason[] = []
   const accepted: Evidence[] = []
   let forged = false
   const acceptedAt = quest.acceptedAt === null ? Number.NaN : Date.parse(quest.acceptedAt)
@@ -31,13 +36,13 @@ export function verifyQuest(quest: Quest, evidence: readonly Evidence[], usedEls
   for (const item of evidence) {
     if (item.hostId !== quest.hostId) {
       forged = true
-      reasons.push(`${item.id}: belongs to another host`)
+      reasons.push({ code: 'other_host', evidenceId: item.id })
     } else if (!(Date.parse(item.observedAt) >= acceptedAt)) {
-      reasons.push(`${item.id}: observed before the quest was accepted`)
+      reasons.push({ code: 'before_acceptance', evidenceId: item.id })
     } else if (usedElsewhere.has(item.contentHash)) {
-      reasons.push(`${item.id}: already counted for another quest`)
+      reasons.push({ code: 'reused', evidenceId: item.id })
     } else if (item.kind === 'manual' && !item.attested) {
-      reasons.push(`${item.id}: manual evidence must be attested by the host`)
+      reasons.push({ code: 'unattested', evidenceId: item.id })
     } else {
       accepted.push(item)
     }
@@ -48,7 +53,7 @@ export function verifyQuest(quest: Quest, evidence: readonly Evidence[], usedEls
     const count = accepted.filter(item => item.kind === criterion.kind).length
     if (count < criterion.minCount) {
       satisfied = false
-      reasons.push(`criterion "${criterion.description}": ${count}/${criterion.minCount} ${criterion.kind}`)
+      reasons.push({ code: 'criterion_unmet', description: criterion.description, kind: criterion.kind, count, required: criterion.minCount })
     }
   }
 

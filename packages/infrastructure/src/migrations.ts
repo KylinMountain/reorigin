@@ -86,6 +86,8 @@ const MIGRATIONS: readonly string[] = [
    CREATE TRIGGER events_append_only_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
    CREATE TRIGGER ledger_append_only_update BEFORE UPDATE ON reward_ledger BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
    CREATE TRIGGER ledger_append_only_delete BEFORE DELETE ON reward_ledger BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;`,
+  // P2: why a quest was suggested (required from agents).
+  `ALTER TABLE quests ADD COLUMN rationale TEXT NOT NULL DEFAULT '';`,
 ]
 
 export const SCHEMA_VERSION = MIGRATIONS.length

@@ -50,6 +50,8 @@ export interface Quest {
   readonly source: QuestSource
   readonly title: string
   readonly objective: string
+  /** Why the quest was suggested; required from an agent so the Host can judge where it came from. */
+  readonly rationale: string
   readonly criteria: readonly EvidenceCriterion[]
   readonly reward: RewardRule
   readonly status: QuestStatus
@@ -77,12 +79,17 @@ export function proposeQuest(input: {
   source: QuestSource
   title: string
   objective: string
+  rationale?: string
   criteria: readonly EvidenceCriterion[]
   reward: RewardRule
   at: string
 }): Quest {
   const title = input.title.trim()
   if (title.length === 0) throw new DomainError('quest/invalid', 'quest needs a title')
+  const rationale = (input.rationale ?? '').trim()
+  if (input.source === 'agent' && rationale.length === 0) {
+    throw new DomainError('quest/invalid', 'an agent-proposed quest must explain why it is suggested')
+  }
   if (input.criteria.length === 0) {
     throw new DomainError('quest/invalid', 'quest needs at least one acceptance criterion')
   }
@@ -101,6 +108,7 @@ export function proposeQuest(input: {
     source: input.source,
     title,
     objective: input.objective.trim(),
+    rationale,
     criteria: input.criteria,
     reward: input.reward,
     status: 'PROPOSED',

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   attachEvidence,
   bindHost,
+  isTerminal,
   levelForXp,
   proposeQuest,
   recordEvidence,
@@ -15,7 +16,7 @@ import {
   type Quest,
   type QuestStatus,
 } from '@reorigin/domain'
-import { ALLOWED_ACTORS, commandSchema, type Command } from './commands.ts'
+import { AGENT_MAX_PENDING_PROPOSALS, AGENT_MAX_XP, ALLOWED_ACTORS, commandSchema, type Command } from './commands.ts'
 import { ApplicationError, toFailure, type Result } from './errors.ts'
 import type { Clock, EventType, IdSource, Store, StoredVerification, Transaction } from './ports.ts'
 
@@ -33,6 +34,19 @@ export interface Dashboard {
   readonly quests: readonly QuestView[]
   readonly ledger: readonly LedgerEntry[]
 }
+
+export type AgentBrief =
+  | { readonly bound: false }
+  | {
+    readonly bound: true
+    readonly displayName: string
+    readonly goals: readonly string[]
+    readonly progress: LevelProgress
+    readonly openQuests: readonly { title: string, type: Quest['type'], status: QuestStatus, source: Quest['source'] }[]
+    readonly recentlyCompleted: readonly string[]
+    readonly pendingAgentProposals: number
+    readonly limits: { readonly maxXp: number, readonly maxPendingProposals: number }
+  }
 
 /** What one command returns on success; the same value is replayed for a repeated `commandId`. */
 export type CommandOutcome =
@@ -94,6 +108,48 @@ export class ReOriginApp {
     })
   }
 
+  /**
+   * What the agent is told each step: goals, progress, open quests, and the
+   * proposal budget. Deliberately excludes evidence refs and summaries, which
+   * are the Host's personal records, not prompt material.
+   */
+  agentBrief(): AgentBrief {
+    return this.store.transaction(tx => {
+      const host = tx.getHost()
+      if (host === undefined) return { bound: false }
+      const quests = tx.listQuests(host.id)
+      const open = quests.filter(quest => !isTerminal(quest.status))
+      return {
+        bound: true,
+        displayName: host.displayName,
+        goals: host.goals,
+        progress: levelForXp(tx.totalXp(host.id)),
+        openQuests: open.map(quest => ({ title: quest.title, type: quest.type, status: quest.status, source: quest.source })),
+        recentlyCompleted: quests.filter(quest => quest.status === 'COMPLETED').slice(0, 5).map(quest => quest.title),
+        pendingAgentProposals: open.filter(quest => quest.source === 'agent' && quest.status === 'PROPOSED').length,
+        limits: { maxXp: AGENT_MAX_XP, maxPendingProposals: AGENT_MAX_PENDING_PROPOSALS },
+      }
+    })
+  }
+
+  /**
+   * The model-facing tool's only door. The actor is fixed to `agent`, and the
+   * command id derives from the tool call id, so a retried call proposes once.
+   */
+  proposeFromAgent(callId: string, payload: unknown): Result<CommandOutcome> {
+    const hostId = this.store.transaction(tx => tx.getHost()?.id)
+    if (hostId === undefined) return { ok: false, error: { code: 'host/not-bound', message: 'no host is bound yet' } }
+    return this.execute({
+      commandId: `agent:${createHash('sha256').update(callId).digest('hex').slice(0, 40)}`,
+      actor: 'agent',
+      issuedAt: this.clock.now(),
+      schemaVersion: 1,
+      type: 'ProposeQuest',
+      hostId,
+      payload,
+    })
+  }
+
   private handle(tx: Transaction, command: Command): CommandOutcome {
     const at = this.clock.now()
     const emit = (type: EventType, aggregateId: string, payload: unknown): void => {
@@ -131,6 +187,15 @@ export class ReOriginApp {
 
     if (command.type === 'ProposeQuest') {
       const { payload } = command
+      if (command.actor === 'agent') {
+        if (payload.xp > AGENT_MAX_XP) {
+          throw new ApplicationError('policy/agent-limit', `an agent may offer at most ${AGENT_MAX_XP} XP`)
+        }
+        const pending = tx.listQuests(host.id).filter(quest => quest.source === 'agent' && quest.status === 'PROPOSED').length
+        if (pending >= AGENT_MAX_PENDING_PROPOSALS) {
+          throw new ApplicationError('policy/agent-limit', `${pending} agent proposals already await review`)
+        }
+      }
       let quest = proposeQuest({
         id: this.ids.next('quest'),
         hostId: host.id,
@@ -138,6 +203,7 @@ export class ReOriginApp {
         source: command.actor,
         title: payload.title,
         objective: payload.objective,
+        rationale: payload.rationale,
         criteria: payload.criteria,
         reward: { ruleVersion: REWARD_RULE_VERSION, xp: payload.xp },
         at,

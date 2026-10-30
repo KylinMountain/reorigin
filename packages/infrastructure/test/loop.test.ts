@@ -112,22 +112,69 @@ describe('P1 growth loop on SQLite', () => {
     ok(app.execute(cmd('AcceptQuest', { questId: second.quest.id }, { hostId })))
     ok(app.execute(cmd('SubmitQuestEvidence', { questId: second.quest.id, evidence: [{ ...commit, observedAt: later() }] }, { hostId })))
     const verdict = ok(app.execute(cmd('VerifyQuest', { questId: second.quest.id }, { hostId })))
-    expect(verdict).toMatchObject({ quest: { status: 'NEEDS_EVIDENCE' }, verification: { reasons: [expect.stringContaining('already counted'), expect.any(String)] } })
+    expect(verdict).toMatchObject({ quest: { status: 'NEEDS_EVIDENCE' }, verification: { reasons: [{ code: 'reused' }, { code: 'criterion_unmet' }] } })
   })
 
   it('lets an agent propose but never accept, submit, verify, or settle', () => {
     const app = open()
     const { hostId } = bindAndAccept(app)
     const proposal = ok(app.execute(cmd('ProposeQuest', {
-      type: 'side', title: 'agent idea', criteria: [{ kind: 'manual', minCount: 1, description: 'note' }], xp: 50,
+      type: 'side', title: 'agent idea', rationale: 'user mentioned it', criteria: [{ kind: 'manual', minCount: 1, description: 'note' }], xp: 50,
     }, { hostId, actor: 'agent' })))
     if (proposal.type !== 'ProposeQuest') throw new Error('unexpected outcome')
-    expect(proposal.quest).toMatchObject({ status: 'PROPOSED', source: 'agent' })
-    for (const type of ['AcceptQuest', 'VerifyQuest', 'SettleQuest']) {
+    expect(proposal.quest).toMatchObject({ status: 'PROPOSED', source: 'agent', rationale: 'user mentioned it' })
+    for (const type of ['AcceptQuest', 'CancelQuest', 'VerifyQuest', 'SettleQuest']) {
       expect(app.execute(cmd(type, { questId: proposal.quest.id }, { hostId, actor: 'agent' }))).toMatchObject({ ok: false, error: { code: 'command/forbidden' } })
     }
+    expect(app.execute(cmd('SubmitQuestEvidence', { questId: proposal.quest.id, evidence: [{ kind: 'manual', ref: 'x', observedAt: later(), attested: true }] }, { hostId, actor: 'agent' })))
+      .toMatchObject({ ok: false, error: { code: 'command/forbidden' } })
     // The Host reviewing the proposal accepts it straight from PROPOSED.
     expect(ok(app.execute(cmd('AcceptQuest', { questId: proposal.quest.id }, { hostId })))).toMatchObject({ quest: { status: 'ACCEPTED' } })
+  })
+
+  describe('agent proposals (P2)', () => {
+    const idea = (overrides: object = {}): object => ({
+      quest_type: 'side', title: '补一个回归测试', objective: '为修过的缺陷补测试', rationale: '宿主提到最近修了几个 bug 但没写测试',
+      type: 'side', criteria: [{ kind: 'git_commit', minCount: 1, description: '1 份 Git 提交证据' }], xp: 80, ...overrides,
+    })
+
+    it('needs a bound host and a rationale', () => {
+      const app = open()
+      expect(app.proposeFromAgent('call-0', idea())).toMatchObject({ ok: false, error: { code: 'host/not-bound' } })
+      bindAndAccept(app)
+      expect(app.proposeFromAgent('call-1', idea({ rationale: '   ' }))).toMatchObject({ ok: false, error: { code: 'quest/invalid' } })
+    })
+
+    it('caps the reward and the review queue', () => {
+      const app = open()
+      bindAndAccept(app)
+      expect(app.proposeFromAgent('call-big', idea({ xp: 201 }))).toMatchObject({ ok: false, error: { code: 'policy/agent-limit' } })
+      for (const call of ['a', 'b', 'c']) ok(app.proposeFromAgent(call, idea({ title: `idea ${call}` })))
+      expect(app.proposeFromAgent('d', idea())).toMatchObject({ ok: false, error: { code: 'policy/agent-limit' } })
+      // The Host clearing one proposal frees a slot.
+      const pending = app.dashboard().quests.find(quest => quest.source === 'agent' && quest.status === 'PROPOSED')!
+      ok(app.execute(cmd('CancelQuest', { questId: pending.id }, { hostId: app.dashboard().host!.id })))
+      ok(app.proposeFromAgent('e', idea({ title: 'idea e' })))
+    })
+
+    it('proposes once per tool call even when the call is retried', () => {
+      const app = open()
+      bindAndAccept(app)
+      const first = ok(app.proposeFromAgent('call-retry', idea()))
+      const retry = ok(app.proposeFromAgent('call-retry', idea({ title: 'a different title on retry' })))
+      expect(retry).toEqual(first)
+      expect(app.dashboard().quests.filter(quest => quest.source === 'agent')).toHaveLength(1)
+    })
+
+    it('briefs the agent without leaking evidence', () => {
+      const app = open()
+      const { hostId, questId } = bindAndAccept(app)
+      ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'link', ref: 'https://private.example/diary', summary: 'secret note', observedAt: later() }] }, { hostId })))
+      ok(app.proposeFromAgent('call-brief', idea()))
+      const brief = app.agentBrief()
+      expect(brief).toMatchObject({ bound: true, displayName: 'Kylin', pendingAgentProposals: 1, limits: { maxXp: 200, maxPendingProposals: 3 } })
+      expect(JSON.stringify(brief)).not.toMatch(/private\.example|secret note/)
+    })
   })
 
   it('validates input and rejects a second bind', () => {

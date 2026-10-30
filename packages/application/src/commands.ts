@@ -48,6 +48,7 @@ export const commandSchema = z.discriminatedUnion('type', [
       type: z.enum(QUEST_TYPES),
       title: z.string().min(1).max(120),
       objective: z.string().max(1000).default(''),
+      rationale: z.string().max(500).default(''),
       criteria: z.array(criterion).min(1).max(5),
       xp: z.int().min(0).max(MAX_XP_PER_QUEST),
     }),
@@ -67,6 +68,10 @@ export const commandSchema = z.discriminatedUnion('type', [
 export type Command = z.infer<typeof commandSchema>
 export type CommandType = Command['type']
 export type Actor = Command['actor']
+
+/** Agent proposals are suggestions, not grants: smaller rewards and a bounded review queue. */
+export const AGENT_MAX_XP = 200
+export const AGENT_MAX_PENDING_PROPOSALS = 3
 
 /**
  * Who may issue what. An agent may only suggest quests (ADR-003): it can never

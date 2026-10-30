@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import type { Dashboard, QuestView } from '@reorigin/application'
-import type { EvidenceKind, QuestStatus, QuestType } from '@reorigin/domain'
-import { RemoteFailure, type ReOriginClient } from './api.ts'
+import type { EvidenceKind, QuestStatus, QuestType, VerificationReason } from '@reorigin/domain'
+import { RemoteFailure, type AgentStatus, type ReOriginClient } from './api.ts'
 
 const STATUS: Record<QuestStatus, { label: string, tone: string }> = {
   PROPOSED: { label: '待审阅', tone: 'accent' },
@@ -20,6 +20,20 @@ const STATUS: Record<QuestStatus, { label: string, tone: string }> = {
 const QUEST_TYPE: Record<QuestType, string> = { main: '主线', side: '支线', daily: '日常', hidden: '隐藏', breakthrough: '突破' }
 const EVIDENCE_KIND: Record<EvidenceKind, string> = { manual: '亲述（需确认属实）', link: '链接', git_commit: 'Git 提交' }
 
+const SOURCE: Record<QuestView['source'], string> = { host: '宿主自定', agent: 'Agent 建议', system: '系统' }
+
+/** Word a verifier reason for the Host. Rows written before reasons were structured still hold plain strings. */
+function describeReason(reason: VerificationReason | string): string {
+  if (typeof reason === 'string') return reason
+  switch (reason.code) {
+    case 'other_host': return '有证据不属于当前宿主，任务已驳回'
+    case 'before_acceptance': return '有证据的发生时间早于接受任务，不计入'
+    case 'reused': return '有证据已经计入过其他任务，不能重复使用'
+    case 'unattested': return '亲述证据需要勾选「我确认以上内容属实」'
+    case 'criterion_unmet': return `「${reason.description}」：已有 ${reason.count} / 需要 ${reason.required}`
+  }
+}
+
 type Run = (work: () => Promise<unknown>, notice?: string) => Promise<void>
 
 export function SystemPanel({ client }: { client: ReOriginClient }) {
@@ -28,7 +42,12 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const reload = useCallback(async () => setDashboard(await client.dashboard()), [client])
+  const [agent, setAgent] = useState<AgentStatus | null>(null)
+  const reload = useCallback(async () => {
+    const [next, status] = await Promise.all([client.dashboard(), client.agentStatus()])
+    setDashboard(next)
+    setAgent(status)
+  }, [client])
   const run: Run = useCallback(async (work, message) => {
     setBusy(true)
     setError(null)
@@ -45,6 +64,17 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
   }, [reload])
 
   useEffect(() => { reload().catch(failure => setError(String(failure))) }, [reload])
+
+  // Agent proposals arrive from conversations elsewhere in DSH; pick them up while the panel is open.
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === 'visible') reload().catch(() => {}) }
+    const timer = window.setInterval(refresh, 10_000)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [reload])
 
   return (
     <div className="ro-root" data-testid="reorigin-panel">
@@ -63,6 +93,13 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
           : dashboard.host === null
             ? <BindForm run={run} busy={busy} client={client} />
             : <HostView dashboard={dashboard} run={run} busy={busy} client={client} hostId={dashboard.host.id} />}
+        {agent !== null && (
+          <p className="ro-muted" data-testid="reorigin-agent-status">
+            {agent.connected && agent.toolRegistered
+              ? `Agent 集成：已连接。在 DSH 会话中谈及你的目标时，Agent 可通过 ${agent.toolName} 向这里提议任务。`
+              : 'Agent 集成：未连接（当前 DSH 组合没有提供工具或提示词服务）。'}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -195,16 +232,23 @@ function QuestCard({ quest, run, busy, client, hostId }: { quest: QuestView } & 
         <span className="ro-muted ro-mono">{quest.settled ? `已结算 +${quest.reward.xp} XP` : `奖励 ${quest.reward.xp} XP`}</span>
       </div>
       {quest.objective !== '' && <p style={{ margin: '8px 0 0' }}>{quest.objective}</p>}
+      {quest.source === 'agent' && (
+        <p className="ro-proposal">
+          <span className="ro-badge" data-tone="accent">系统提议</span>
+          {quest.rationale !== '' ? `理由：${quest.rationale}` : '（未说明理由）'}
+          {quest.status === 'PROPOSED' && <span className="ro-muted"> · 由 Agent 根据对话建议，接受与否由你决定</span>}
+        </p>
+      )}
       <ul className="ro-list">
         {quest.criteria.map(criterion => <li key={criterion.description}>验收：{criterion.description}</li>)}
       </ul>
       <p className="ro-muted" style={{ margin: '6px 0 0' }}>
-        来源：{quest.source === 'host' ? '宿主自定' : quest.source === 'agent' ? 'Agent 建议' : '系统'} · 已提交证据 {quest.evidenceIds.length} 份
+        来源：{SOURCE[quest.source]} · 已提交证据 {quest.evidenceIds.length} 份
       </p>
       {verification !== null && verification.verdict !== 'pass' && (
         <div style={{ marginTop: 8 }}>
-          <span className="ro-muted">最近一次核验（{verification.ruleVersion}）未通过：</span>
-          <ul className="ro-list">{verification.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+          <span className="ro-muted">最近一次核验（{verification.ruleVersion}）{verification.verdict === 'reject' ? '已驳回' : '未通过'}：</span>
+          <ul className="ro-list">{verification.reasons.map((reason, index) => <li key={index}>{describeReason(reason)}</li>)}</ul>
         </div>
       )}
       {canSubmit && <EvidenceForm quest={quest} run={run} busy={busy} client={client} hostId={hostId} />}

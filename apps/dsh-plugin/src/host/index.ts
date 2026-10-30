@@ -12,6 +12,7 @@ import { bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol'
 import { ReOriginApp, type CommandOutcome, type Dashboard, type Result } from '@reorigin/application'
 import { SqliteStore, randomIds, systemClock } from '@reorigin/infrastructure'
 import { REMOTE_METHODS, REMOTE_NAMESPACE } from '../shared/remote.ts'
+import { AgentLink, agentPlugin, type AgentStatus } from './agent.ts'
 
 /** Stable string key `@Remote` writes onto a service prototype (typert-protocol descriptor v1). */
 const REMOTE_METHOD_DESCRIPTOR = '@deepseek-ai/dsh-typert-protocol/remote-methods'
@@ -23,6 +24,7 @@ export function databasePath(): string {
 export default class ReOriginService extends Service {
   readonly typertRemote: unknown
   private readonly app: ReOriginApp
+  private readonly agentLink = new AgentLink()
 
   constructor(ctx: Context) {
     super(ctx, 'reorigin')
@@ -32,10 +34,16 @@ export default class ReOriginService extends Service {
     const store = new SqliteStore(path)
     this.app = new ReOriginApp({ store, clock: systemClock, ids: randomIds })
     ctx.effect(() => () => store.close(), 'reorigin: close store')
+    // Waits for DSH's tools and systemPrompt services; a profile without an agent plane just never mounts it.
+    ctx.plugin(agentPlugin(this.app, this.agentLink))
   }
 
   dashboard(): Dashboard {
     return this.app.dashboard()
+  }
+
+  agentStatus(): AgentStatus {
+    return this.agentLink.status()
   }
 
   /** The browser speaks for the Host, never for an agent or the system, whatever it claims. */

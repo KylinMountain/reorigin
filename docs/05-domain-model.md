@@ -44,6 +44,13 @@ AVAILABLE / ACCEPTED / IN_PROGRESS → CANCELLED 或 EXPIRED（受策略约束�
 
 核验优先级：**确定性规则与可验证外部工具结果 > 经确认的人工证据 > 模型辅助语义评估**。必须保留 `observed_at` 与 `recorded_at` 两类时间，防止事后信息伪装成当时观测。证据重复使用有明确策略；争议可申诉，账本通过补偿修正。
 
+## 实现补充（2026-10-31）
+
+- **期限**：`expires_at` 到期后 PROPOSED → CANCELLED，AVAILABLE/ACCEPTED/IN_PROGRESS → EXPIRED；SUBMITTED、VERIFYING、NEEDS_EVIDENCE 不受期限影响（宿主已行动，不能被时钟判失败）。
+- **核验 `deterministic-v2`**：在 v1（类型与数量、观测时间不早于接受、内容哈希不跨任务复用、他人证据驳回）之上，证据必须「由授权来源佐证」或「宿主确认属实」之一才计入；佐证证据的 `observed_at` 取来源记录。
+- **新增持久化表**：`consents`、`world_events`（`(consent_id, external_id)` 唯一，撤权可删除）、`notices`（`source_key` 唯一）、`memories`；`quests` 增加 `expires_at`、`skill`、`source_key`，`evidence` 增加 `corroborated_by`，`hosts` 增加 `preferences_json`。
+- **新增命令**：`GrantConsent`、`RevokeConsent`、`UpdatePreferences`、`AddMemory`、`ForgetMemory`、`MarkNoticesRead`，仅宿主可发；`ingestCommits` 与 `tick` 是系统入口，不接受外部 actor。
+
 ## 奖励结算
 
 建议奖励幂等键为 `host_id + quest_id + reward_rule_version + reward_type`。XP 和徽章受 Reward Engine 裁决；Growth Engine 才能维护真实技能的有证据评估。事件和账本与 Quest 状态写入必须具有可恢复的一致性协议。

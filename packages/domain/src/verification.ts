@@ -1,8 +1,11 @@
 import type { Evidence, EvidenceKind } from './evidence.ts'
 import type { Quest } from './quest.ts'
 
-/** Bump when the rules below change; stored with every verdict. */
-export const VERIFIER_RULE_VERSION = 'deterministic-v1'
+/**
+ * Bump when the rules below change; stored with every verdict.
+ * v2: evidence counts only when corroborated by an authorized source or attested by the Host.
+ */
+export const VERIFIER_RULE_VERSION = 'deterministic-v2'
 
 export type Verdict = 'pass' | 'needs_evidence' | 'reject'
 
@@ -41,7 +44,7 @@ export function verifyQuest(quest: Quest, evidence: readonly Evidence[], usedEls
       reasons.push({ code: 'before_acceptance', evidenceId: item.id })
     } else if (usedElsewhere.has(item.contentHash)) {
       reasons.push({ code: 'reused', evidenceId: item.id })
-    } else if (item.kind === 'manual' && !item.attested) {
+    } else if (item.corroboratedBy === null && !item.attested) {
       reasons.push({ code: 'unattested', evidenceId: item.id })
     } else {
       accepted.push(item)

@@ -41,7 +41,8 @@ function evidence(overrides: Partial<Evidence> = {}): Evidence {
     observedAt: T2,
     recordedAt: T2,
     contentHash: 'sha256:abc',
-    attested: false,
+    attested: true,
+    corroboratedBy: null,
     ...overrides,
   }
 }
@@ -87,7 +88,7 @@ describe('deterministic verifier', () => {
       expect(verifyQuest(accepted, [item], new Set(['sha256:used'])).verdict).toBe('needs_evidence')
     }
     const manualQuest = { ...accepted, criteria: [{ kind: 'manual' as const, minCount: 1, description: 'note' }] }
-    expect(verifyQuest(manualQuest, [evidence({ kind: 'manual' })], new Set()).verdict).toBe('needs_evidence')
+    expect(verifyQuest(manualQuest, [evidence({ kind: 'manual', attested: false })], new Set()).verdict).toBe('needs_evidence')
     expect(verifyQuest(manualQuest, [evidence({ kind: 'manual', attested: true })], new Set()).verdict).toBe('pass')
   })
 

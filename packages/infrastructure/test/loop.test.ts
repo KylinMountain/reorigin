@@ -16,7 +16,12 @@ let path: string
 let stores: SqliteStore[]
 let tick: number
 
-const clock: Clock = { now: () => new Date(Date.UTC(2026, 9, 30, 10, 0, tick++)).toISOString() }
+const clock: Clock = {
+  now: () => new Date(Date.UTC(2026, 9, 30, 10, 0, tick++)).toISOString(),
+  localHour: iso => new Date(iso).getUTCHours(),
+  localDay: iso => iso.slice(0, 10),
+  localDayStart: iso => `${iso.slice(0, 10)}T00:00:00.000Z`,
+}
 let counter = 0
 const ids: IdSource = { next: prefix => `${prefix}_${++counter}` }
 
@@ -70,7 +75,7 @@ describe('P1 growth loop on SQLite', () => {
   it('completes a quest, grants XP exactly once, and survives a restart', () => {
     const app = open()
     const { hostId, questId } = bindAndAccept(app)
-    ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'git_commit', ref: 'a1b2c3d', observedAt: later() }] }, { hostId })))
+    ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'git_commit', ref: 'a1b2c3d', observedAt: later(), attested: true }] }, { hostId })))
     const verified = ok(app.execute(cmd('VerifyQuest', { questId }, { hostId })))
     expect(verified).toMatchObject({ quest: { status: 'COMPLETED' }, verification: { verdict: 'pass' } })
 
@@ -94,14 +99,14 @@ describe('P1 growth loop on SQLite', () => {
     expect(ok(app.execute(cmd('VerifyQuest', { questId }, { hostId })))).toMatchObject({ quest: { status: 'NEEDS_EVIDENCE' } })
     expect(app.execute(cmd('SettleQuest', { questId }, { hostId }))).toMatchObject({ ok: false, error: { code: 'settlement/not-completed' } })
 
-    ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'git_commit', ref: 'f00d', observedAt: later() }] }, { hostId })))
+    ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'git_commit', ref: 'f00d', observedAt: later(), attested: true }] }, { hostId })))
     expect(ok(app.execute(cmd('VerifyQuest', { questId }, { hostId })))).toMatchObject({ quest: { status: 'COMPLETED' } })
   })
 
   it('does not count the same evidence for two quests', () => {
     const app = open()
     const { hostId, questId } = bindAndAccept(app)
-    const commit = { kind: 'git_commit', ref: 'same-sha', observedAt: later() }
+    const commit = { kind: 'git_commit', ref: 'same-sha', observedAt: later(), attested: true }
     ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [commit] }, { hostId })))
     ok(app.execute(cmd('VerifyQuest', { questId }, { hostId })))
 
@@ -201,7 +206,7 @@ describe('P1 growth loop on SQLite', () => {
   it('keeps the ledger and audit log append-only', () => {
     const app = open()
     const { hostId, questId } = bindAndAccept(app)
-    ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'git_commit', ref: 'c0ffee', observedAt: later() }] }, { hostId })))
+    ok(app.execute(cmd('SubmitQuestEvidence', { questId, evidence: [{ kind: 'git_commit', ref: 'c0ffee', observedAt: later(), attested: true }] }, { hostId })))
     ok(app.execute(cmd('VerifyQuest', { questId }, { hostId })))
     ok(app.execute(cmd('SettleQuest', { questId }, { hostId })))
     const db = new DatabaseSync(path)
@@ -232,7 +237,7 @@ describe('P1 growth loop on SQLite', () => {
         : type === 'ProposeQuest'
           ? cmd(type, { type: 'daily', title: `q${step}`, criteria: [{ kind: 'git_commit', minCount: 1, description: 'c' }], xp: 10 + random(50) }, { hostId })
           : type === 'SubmitQuestEvidence'
-            ? cmd(type, { questId: target!.id, evidence: [{ kind: 'git_commit', ref: `sha${random(30)}`, observedAt: later() }] }, { hostId })
+            ? cmd(type, { questId: target!.id, evidence: [{ kind: 'git_commit', ref: `sha${random(30)}`, observedAt: later(), attested: true }] }, { hostId })
             : cmd(type, { questId: target!.id }, { hostId })
       issued.push(command)
       app.execute(command)

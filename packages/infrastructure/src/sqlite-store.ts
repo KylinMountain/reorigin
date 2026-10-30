@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
-import { ApplicationError, type StoredEvent, type StoredVerification, type Store, type Transaction } from '@reorigin/application'
-import type { Evidence, Host, LedgerEntry, Quest } from '@reorigin/domain'
+import { ApplicationError, type Memory, type Notice, type StoredEvent, type StoredVerification, type Store, type Transaction } from '@reorigin/application'
+import { DEFAULT_PREFERENCES, type Consent, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type WorldEvent } from '@reorigin/domain'
 import { migrate } from './migrations.ts'
 
 type Row = Record<string, SQLInputValue>
@@ -62,8 +62,8 @@ function createTransaction(db: DatabaseSync): Transaction {
     },
     insertQuest(quest) {
       run(`INSERT INTO quests (id, host_id, type, source, title, objective, criteria_json, reward_rule_version, reward_xp,
-             status, revision, proposed_at, accepted_at, closed_at, evidence_ids_json, rationale)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             status, revision, proposed_at, accepted_at, closed_at, evidence_ids_json, rationale, expires_at, skill, source_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ...questColumns(quest))
     },
     updateQuest(quest, expectedRevision) {
@@ -74,10 +74,10 @@ function createTransaction(db: DatabaseSync): Transaction {
     },
 
     insertEvidence(evidence) {
-      run(`INSERT INTO evidence (id, host_id, kind, ref, summary, observed_at, recorded_at, content_hash, attested)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      run(`INSERT INTO evidence (id, host_id, kind, ref, summary, observed_at, recorded_at, content_hash, attested, corroborated_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       evidence.id, evidence.hostId, evidence.kind, evidence.ref, evidence.summary, evidence.observedAt,
-      evidence.recordedAt, evidence.contentHash, evidence.attested ? 1 : 0)
+      evidence.recordedAt, evidence.contentHash, evidence.attested ? 1 : 0, evidence.corroboratedBy)
     },
     getEvidence(evidenceIds) {
       if (evidenceIds.length === 0) return []
@@ -123,6 +123,89 @@ function createTransaction(db: DatabaseSync): Transaction {
       event.schemaVersion, JSON.stringify(event.payload))
       run('INSERT INTO outbox (event_id) VALUES (?)', event.eventId)
     },
+    pendingOutbox(limit) {
+      return all(`SELECT e.* FROM outbox o JOIN events e ON e.event_id = o.event_id
+                  WHERE o.dispatched_at IS NULL ORDER BY o.rowid LIMIT ?`, limit).map(toEvent)
+    },
+    markDispatched(eventId, at) {
+      run('UPDATE outbox SET dispatched_at = ? WHERE event_id = ?', at, eventId)
+    },
+
+    findQuestBySourceKey(hostId, sourceKey) {
+      const row = one('SELECT * FROM quests WHERE host_id = ? AND source_key = ?', hostId, sourceKey)
+      return row === undefined ? undefined : toQuest(row)
+    },
+    countSystemProposalsSince(hostId, since) {
+      return Number(one(`SELECT COUNT(*) AS n FROM quests WHERE host_id = ? AND source = 'system' AND proposed_at >= ?`, hostId, since)!.n)
+    },
+
+    getPreferences(hostId) {
+      const raw = one('SELECT preferences_json FROM hosts WHERE id = ?', hostId)?.preferences_json
+      return raw === null || raw === undefined ? DEFAULT_PREFERENCES : { ...DEFAULT_PREFERENCES, ...JSON.parse(String(raw)) as Partial<Preferences> }
+    },
+    setPreferences(hostId, preferences) {
+      run('UPDATE hosts SET preferences_json = ? WHERE id = ?', JSON.stringify(preferences), hostId)
+    },
+
+    insertConsent(consent) {
+      run(`INSERT INTO consents (id, host_id, source, scope_ref, author_email, status, granted_at, revoked_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      consent.id, consent.hostId, consent.source, consent.scopeRef, consent.authorEmail, consent.status, consent.grantedAt, consent.revokedAt)
+    },
+    getConsent(consentId) {
+      const row = one('SELECT * FROM consents WHERE id = ?', consentId)
+      return row === undefined ? undefined : toConsent(row)
+    },
+    listConsents(hostId) {
+      return all('SELECT * FROM consents WHERE host_id = ? ORDER BY granted_at DESC, rowid DESC', hostId).map(toConsent)
+    },
+    updateConsent(consent) {
+      run('UPDATE consents SET status = ?, revoked_at = ? WHERE id = ?', consent.status, consent.revokedAt, consent.id)
+    },
+
+    insertWorldEvent(event) {
+      return run(`INSERT INTO world_events (id, host_id, consent_id, source, external_id, observed_at, summary, files_changed)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (consent_id, external_id) DO NOTHING`,
+      event.id, event.hostId, event.consentId, event.source, event.externalId, event.observedAt, event.summary, event.filesChanged) === 1
+    },
+    listWorldEvents(hostId, since) {
+      return all(`SELECT w.* FROM world_events w JOIN consents c ON c.id = w.consent_id
+                  WHERE w.host_id = ? AND c.status = 'active' AND w.observed_at >= ? ORDER BY w.observed_at DESC`, hostId, since).map(toWorldEvent)
+    },
+    findCommit(hostId, shaPrefix) {
+      if (!/^[0-9a-f]{7,64}$/.test(shaPrefix)) return undefined
+      const row = one(`SELECT w.* FROM world_events w JOIN consents c ON c.id = w.consent_id
+                       WHERE w.host_id = ? AND c.status = 'active' AND w.source = 'git_repo' AND substr(w.external_id, 1, ?) = ?
+                       ORDER BY w.observed_at DESC LIMIT 1`, hostId, shaPrefix.length, shaPrefix)
+      return row === undefined ? undefined : toWorldEvent(row)
+    },
+    deleteWorldEvents(consentId) {
+      return run('DELETE FROM world_events WHERE consent_id = ?', consentId)
+    },
+
+    insertNotice(notice) {
+      return run(`INSERT INTO notices (id, host_id, kind, title, body, created_at, read_at, source_key)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (source_key) DO NOTHING`,
+      notice.id, notice.hostId, notice.kind, notice.title, notice.body, notice.createdAt, notice.readAt, notice.sourceKey) === 1
+    },
+    listNotices(hostId, limit) {
+      return all('SELECT * FROM notices WHERE host_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?', hostId, limit).map(toNotice)
+    },
+    markNoticesRead(hostId, at) {
+      run('UPDATE notices SET read_at = ? WHERE host_id = ? AND read_at IS NULL', at, hostId)
+    },
+
+    insertMemory(memory) {
+      return run(`INSERT INTO memories (id, host_id, kind, text, source_ref, created_at, forgotten_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+      memory.id, memory.hostId, memory.kind, memory.text, memory.sourceRef, memory.createdAt, memory.forgottenAt) === 1
+    },
+    listMemories(hostId, limit) {
+      return all('SELECT * FROM memories WHERE host_id = ? AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?', hostId, limit).map(toMemory)
+    },
+    forgetMemory(hostId, memoryId, at) {
+      return run('UPDATE memories SET forgotten_at = ? WHERE id = ? AND host_id = ? AND forgotten_at IS NULL', at, memoryId, hostId) === 1
+    },
 
     getCommandResult(commandId) {
       const row = one('SELECT result_json FROM processed_commands WHERE command_id = ?', commandId)
@@ -138,7 +221,7 @@ function createTransaction(db: DatabaseSync): Transaction {
 function questColumns(quest: Quest): SQLInputValue[] {
   return [quest.id, quest.hostId, quest.type, quest.source, quest.title, quest.objective, JSON.stringify(quest.criteria),
     quest.reward.ruleVersion, quest.reward.xp, quest.status, quest.revision, quest.proposedAt, quest.acceptedAt,
-    quest.closedAt, JSON.stringify(quest.evidenceIds), quest.rationale]
+    quest.closedAt, JSON.stringify(quest.evidenceIds), quest.rationale, quest.expiresAt, quest.skill, quest.sourceKey]
 }
 
 const text = (value: SQLInputValue | undefined): string => String(value)
@@ -165,6 +248,9 @@ function toQuest(row: Row): Quest {
     acceptedAt: nullableText(row.accepted_at),
     closedAt: nullableText(row.closed_at),
     evidenceIds: JSON.parse(text(row.evidence_ids_json)),
+    expiresAt: nullableText(row.expires_at),
+    skill: text(row.skill),
+    sourceKey: nullableText(row.source_key),
   }
 }
 
@@ -179,6 +265,7 @@ function toEvidence(row: Row): Evidence {
     recordedAt: text(row.recorded_at),
     contentHash: text(row.content_hash),
     attested: Number(row.attested) === 1,
+    corroboratedBy: nullableText(row.corroborated_by),
   }
 }
 
@@ -191,6 +278,70 @@ function toVerification(row: Row): StoredVerification {
     acceptedEvidenceIds: JSON.parse(text(row.accepted_evidence_ids_json)),
     reasons: JSON.parse(text(row.reasons_json)),
     verifiedAt: text(row.verified_at),
+  }
+}
+
+function toEvent(row: Row): StoredEvent {
+  return {
+    eventId: text(row.event_id),
+    type: text(row.type) as StoredEvent['type'],
+    aggregateId: text(row.aggregate_id),
+    occurredAt: text(row.occurred_at),
+    causationId: text(row.causation_id),
+    correlationId: text(row.correlation_id),
+    schemaVersion: 1,
+    payload: JSON.parse(text(row.payload_json)),
+  }
+}
+
+function toConsent(row: Row): Consent {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    source: text(row.source) as Consent['source'],
+    scopeRef: text(row.scope_ref),
+    authorEmail: text(row.author_email),
+    status: text(row.status) as Consent['status'],
+    grantedAt: text(row.granted_at),
+    revokedAt: nullableText(row.revoked_at),
+  }
+}
+
+function toWorldEvent(row: Row): WorldEvent {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    consentId: text(row.consent_id),
+    source: text(row.source) as WorldEvent['source'],
+    externalId: text(row.external_id),
+    observedAt: text(row.observed_at),
+    summary: text(row.summary),
+    filesChanged: Number(row.files_changed),
+  }
+}
+
+function toNotice(row: Row): Notice {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    kind: text(row.kind) as Notice['kind'],
+    title: text(row.title),
+    body: text(row.body),
+    createdAt: text(row.created_at),
+    readAt: nullableText(row.read_at),
+    sourceKey: text(row.source_key),
+  }
+}
+
+function toMemory(row: Row): Memory {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    kind: text(row.kind) as Memory['kind'],
+    text: text(row.text),
+    sourceRef: nullableText(row.source_ref),
+    createdAt: text(row.created_at),
+    forgottenAt: nullableText(row.forgotten_at),
   }
 }
 

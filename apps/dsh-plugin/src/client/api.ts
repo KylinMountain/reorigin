@@ -31,6 +31,10 @@ export class ReOriginClient {
     return await this.call('dashboard', {}) as Dashboard
   }
 
+  async syncNow(): Promise<unknown> {
+    return await this.call('syncNow', {})
+  }
+
   async agentStatus(): Promise<AgentStatus> {
     return await this.call('agentStatus', {}) as AgentStatus
   }

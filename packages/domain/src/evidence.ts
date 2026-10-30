@@ -20,8 +20,10 @@ export interface Evidence {
   readonly recordedAt: string
   /** Hash over kind + ref + summary; the reuse check keys on it. */
   readonly contentHash: string
-  /** The Host confirmed this manual claim is true. Required for `manual` evidence to count. */
+  /** The Host confirmed this claim is true. Uncorroborated evidence counts only when attested. */
   readonly attested: boolean
+  /** World event that independently confirms this evidence (e.g. a collected commit); its time replaces the claimed one. */
+  readonly corroboratedBy: string | null
 }
 
 export function recordEvidence(input: Evidence): Evidence {

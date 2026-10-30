@@ -56,5 +56,31 @@ export const STYLES = `
 .ro-input { font: inherit; font-size: 13px; color: var(--ro-fg); background: transparent; border: 1px solid var(--ro-border); border-radius: var(--ro-radius); padding: 6px 10px; width: 100%; }
 .ro-input:focus { outline: 2px solid var(--ro-accent); outline-offset: -1px; }
 .ro-error { border-color: var(--ro-err); color: var(--ro-err); }
+.ro-strong { font-weight: 600; color: var(--ro-fg); }
+.ro-feed { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.ro-feed li { color: var(--ro-fg-2); }
+.ro-feed li[data-unread="true"] { color: var(--ro-fg); }
+.ro-link { font: inherit; font-size: 12px; background: none; border: none; color: var(--ro-fg-3); cursor: pointer; margin-left: 8px; padding: 0; text-decoration: underline; }
+.ro-track { display: grid; grid-template-columns: minmax(80px, 140px) 1fr auto; gap: 10px; align-items: center; margin-top: 6px; }
+.ro-track-name { font-size: 13px; }
+.ro-consent { padding: 6px 0; border-bottom: 1px solid var(--ro-border); }
+.ro-card[data-hidden="true"] { border-style: dashed; }
+.ro-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0,0,0,.72); animation: ro-fade .3s ease; cursor: pointer; }
+.ro-overlay-box { max-width: min(560px, calc(100vw - 32px)); padding: 28px 32px; border: 1px solid var(--ro-accent); border-radius: var(--ro-radius); background: rgba(10,12,18,.92); color: #e8f0ff; box-shadow: 0 0 40px rgba(77,139,255,.35); }
+.ro-line { margin: 6px 0; animation: ro-rise .45s ease both; }
+.ro-levelup { text-align: center; }
+.ro-level-big { font-family: var(--ro-mono); font-size: 56px; font-weight: 800; letter-spacing: .04em; color: var(--ro-accent); animation: ro-pop .6s cubic-bezier(.2,1.6,.4,1) both; }
+@keyframes ro-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes ro-rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+@keyframes ro-pop { from { opacity: 0; transform: scale(.6) } to { opacity: 1; transform: none } }
+@media (max-width: 560px) {
+  .ro-root { padding: 24px 16px 48px; }
+  .ro-title { font-size: 22px; }
+  .ro-track { grid-template-columns: 1fr auto; }
+  .ro-track .ro-bar { grid-column: 1 / -1; grid-row: 2; }
+  .ro-consent { flex-direction: column; align-items: flex-start; }
+  .ro-mono { word-break: break-all; }
+}
+@media (prefers-reduced-motion: reduce) { .ro-overlay, .ro-line, .ro-level-big, .ro-bar > span { animation: none; transition: none; } }
 .ro-toast { border-color: var(--ro-ok); }
 `

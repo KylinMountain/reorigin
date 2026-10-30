@@ -5,6 +5,7 @@ export type DomainErrorCode =
   | 'quest/illegal-transition'
   | 'quest/not-owned'
   | 'evidence/invalid'
+  | 'world/invalid'
   | 'settlement/not-completed'
 
 export class DomainError extends Error {

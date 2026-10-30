@@ -51,6 +51,9 @@ export const commandSchema = z.discriminatedUnion('type', [
       rationale: z.string().max(500).default(''),
       criteria: z.array(criterion).min(1).max(5),
       xp: z.int().min(0).max(MAX_XP_PER_QUEST),
+      /** Daily quests default to one day when omitted. */
+      expiresInDays: z.int().min(1).max(90).optional(),
+      skill: z.string().max(20).default(''),
     }),
   }),
   z.object({ ...envelope, type: z.literal('AcceptQuest'), hostId: id, payload: z.object({ questId: id }) }),
@@ -63,6 +66,34 @@ export const commandSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...envelope, type: z.literal('VerifyQuest'), hostId: id, payload: z.object({ questId: id }) }),
   z.object({ ...envelope, type: z.literal('SettleQuest'), hostId: id, payload: z.object({ questId: id }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('GrantConsent'),
+    hostId: id,
+    payload: z.object({
+      source: z.literal('git_repo'),
+      scopeRef: z.string().min(2).max(1000).refine(path => path.startsWith('/'), 'must be an absolute path'),
+      authorEmail: z.email(),
+    }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('RevokeConsent'),
+    hostId: id,
+    payload: z.object({ consentId: id, deleteData: z.boolean().default(false) }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('UpdatePreferences'),
+    hostId: id,
+    payload: z.object({
+      quietHours: z.object({ start: z.int().min(0).max(23), end: z.int().min(0).max(23) }).nullable(),
+      systemProposalsPerDay: z.int().min(0).max(3),
+    }),
+  }),
+  z.object({ ...envelope, type: z.literal('AddMemory'), hostId: id, payload: z.object({ text: z.string().min(1).max(300) }) }),
+  z.object({ ...envelope, type: z.literal('ForgetMemory'), hostId: id, payload: z.object({ memoryId: id }) }),
+  z.object({ ...envelope, type: z.literal('MarkNoticesRead'), hostId: id, payload: z.object({}) }),
 ])
 
 export type Command = z.infer<typeof commandSchema>
@@ -85,4 +116,11 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   SubmitQuestEvidence: ['host'],
   VerifyQuest: ['host', 'system'],
   SettleQuest: ['host', 'system'],
+  // What the System may observe and remember is the Host's call alone.
+  GrantConsent: ['host'],
+  RevokeConsent: ['host'],
+  UpdatePreferences: ['host'],
+  AddMemory: ['host'],
+  ForgetMemory: ['host'],
+  MarkNoticesRead: ['host'],
 }

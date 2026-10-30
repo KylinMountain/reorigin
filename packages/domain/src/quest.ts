@@ -61,6 +61,23 @@ export interface Quest {
   readonly acceptedAt: string | null
   readonly closedAt: string | null
   readonly evidenceIds: readonly string[]
+  /** After this instant an unstarted or in-progress quest expires; null means open-ended. */
+  readonly expiresAt: string | null
+  /** Free-form growth track tag (e.g. "测试工程"); aggregates completions, never claims proficiency. */
+  readonly skill: string
+  /** Dedupe key for System-generated quests; the same opportunity is proposed at most once. */
+  readonly sourceKey: string | null
+}
+
+/**
+ * Where an expired deadline leads. Quests the Host already submitted evidence
+ * for (SUBMITTED, VERIFYING, NEEDS_EVIDENCE) are never failed by the clock.
+ */
+export function expiryTarget(quest: Quest, now: string): QuestStatus | null {
+  if (quest.expiresAt === null || Date.parse(quest.expiresAt) > Date.parse(now)) return null
+  if (quest.status === 'PROPOSED') return 'CANCELLED'
+  if (quest.status === 'AVAILABLE' || quest.status === 'ACCEPTED' || quest.status === 'IN_PROGRESS') return 'EXPIRED'
+  return null
 }
 
 export interface QuestTransition {
@@ -83,6 +100,9 @@ export function proposeQuest(input: {
   criteria: readonly EvidenceCriterion[]
   reward: RewardRule
   at: string
+  expiresAt?: string | null
+  skill?: string
+  sourceKey?: string | null
 }): Quest {
   const title = input.title.trim()
   if (title.length === 0) throw new DomainError('quest/invalid', 'quest needs a title')
@@ -117,6 +137,9 @@ export function proposeQuest(input: {
     acceptedAt: null,
     closedAt: null,
     evidenceIds: [],
+    expiresAt: input.expiresAt ?? null,
+    skill: (input.skill ?? '').trim(),
+    sourceKey: input.sourceKey ?? null,
   }
 }
 

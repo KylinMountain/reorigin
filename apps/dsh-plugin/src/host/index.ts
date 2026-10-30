@@ -9,13 +9,18 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol'
-import { ReOriginApp, type CommandOutcome, type Dashboard, type Result } from '@reorigin/application'
-import { SqliteStore, randomIds, systemClock } from '@reorigin/infrastructure'
+import { ReOriginApp, type CommandOutcome, type Dashboard, type Result, type TickReport } from '@reorigin/application'
+import { SqliteStore, isGitRepository, randomIds, readCommits, systemClock } from '@reorigin/infrastructure'
 import { REMOTE_METHODS, REMOTE_NAMESPACE } from '../shared/remote.ts'
 import { AgentLink, agentPlugin, type AgentStatus } from './agent.ts'
 
 /** Stable string key `@Remote` writes onto a service prototype (typert-protocol descriptor v1). */
 const REMOTE_METHOD_DESCRIPTOR = '@deepseek-ai/dsh-typert-protocol/remote-methods'
+
+/** How often the System collects from consented sources and runs its rules. */
+const HEARTBEAT_MS = 60_000
+/** Collection window; older commits are irrelevant to the weekly rules and already deduped if seen. */
+const COLLECT_WINDOW_DAYS = 30
 
 export function databasePath(): string {
   return join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'reorigin', 'reorigin.db')
@@ -36,6 +41,15 @@ export default class ReOriginService extends Service {
     ctx.effect(() => () => store.close(), 'reorigin: close store')
     // Waits for DSH's tools and systemPrompt services; a profile without an agent plane just never mounts it.
     ctx.plugin(agentPlugin(this.app, this.agentLink))
+    ctx.effect(() => {
+      const beat = (): void => { void this.syncNow().catch(error => console.warn('[reorigin] heartbeat failed:', error)) }
+      const first = setTimeout(beat, 3_000)
+      const timer = setInterval(beat, HEARTBEAT_MS)
+      return () => {
+        clearTimeout(first)
+        clearInterval(timer)
+      }
+    }, 'reorigin: heartbeat')
   }
 
   dashboard(): Dashboard {
@@ -47,9 +61,35 @@ export default class ReOriginService extends Service {
   }
 
   /** The browser speaks for the Host, never for an agent or the system, whatever it claims. */
-  execute(command: unknown): Result<CommandOutcome> {
-    const asHost = typeof command === 'object' && command !== null ? { ...command, actor: 'host' } : command
-    return this.app.execute(asHost)
+  async execute(command: unknown): Promise<Result<CommandOutcome>> {
+    const asHost = typeof command === 'object' && command !== null ? { ...command, actor: 'host' } as Record<string, unknown> : command
+    // A repository grant must point at a real work tree; checked here because the Application layer cannot run git.
+    if (isObject(asHost) && asHost.type === 'GrantConsent' && isObject(asHost.payload)) {
+      const path = asHost.payload.scopeRef
+      if (typeof path !== 'string' || !(await isGitRepository(path))) {
+        return { ok: false, error: { code: 'command/invalid', message: `not a git repository: ${String(path)}` } }
+      }
+    }
+    const result = this.app.execute(asHost)
+    // Grants and revocations change what the System sees; reflect them right away.
+    if (result.ok && (result.value.type === 'GrantConsent' || result.value.type === 'SettleQuest')) await this.syncNow()
+    return result
+  }
+
+  /** Collect from every active consent, then run the System's rules and outbox. */
+  async syncNow(): Promise<TickReport & { collected: number }> {
+    let collected = 0
+    const since = new Date(Date.now() - COLLECT_WINDOW_DAYS * 86_400_000).toISOString()
+    for (const consent of this.app.activeConsents()) {
+      try {
+        const commits = await readCommits({ repo: consent.scopeRef, authorEmail: consent.authorEmail, since })
+        const result = this.app.ingestCommits(consent.id, commits)
+        if (result.ok) collected += result.value.added
+      } catch (error) {
+        console.warn(`[reorigin] collecting ${consent.scopeRef} failed:`, error)
+      }
+    }
+    return { ...this.app.tick(), collected }
   }
 }
 
@@ -59,3 +99,7 @@ Object.defineProperty(ReOriginService.prototype, REMOTE_METHOD_DESCRIPTOR, {
     methods: Object.freeze(REMOTE_METHODS.map(method => Object.freeze({ method, invocation: { kind: 'direct' } }))),
   }),
 })
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}

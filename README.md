@@ -10,7 +10,7 @@
 |---|---|
 | `packages/domain` | Pure domain: Host, Quest state machine, Evidence, deterministic verifier, reward ledger rules. No DSH, React, or model SDK. |
 | `packages/application` | Commands (zod-validated), actor rules, idempotent replay, Store/Clock/Id ports. The only way state changes. |
-| `packages/infrastructure` | `node:sqlite` (WAL) Store with migrations, append-only audit events, outbox. |
+| `packages/infrastructure` | `node:sqlite` (WAL) Store with migrations, append-only audit events, outbox; the consented local-git collector. |
 | `apps/dsh-plugin` | DSH bundle: Host service (`reorigin` Remote namespace), the agent tool `reorigin_propose_quest` and System persona, React workspace; `scripts/build.ts` emits `dist/`. |
 | `spikes/p0-dsh-plugin` | The P0 feasibility spike, kept for reference. |
 
@@ -23,6 +23,7 @@ pnpm install
 pnpm test        # vitest: domain + SQLite loop
 pnpm typecheck
 pnpm build       # → apps/dsh-plugin/dist
+pnpm run pack    # → apps/dsh-plugin/release/dsh-plugin-reorigin-<version>.tgz
 ```
 
 Run it inside DSH (pinned at `ce7073d`, checked out at `../deepseek-harness`):
@@ -30,7 +31,7 @@ Run it inside DSH (pinned at `ce7073d`, checked out at `../deepseek-harness`):
 ```sh
 cd ../deepseek-harness
 pnpm dsh --profile reorigin --from-default-profile web --dump-config > /dev/null
-pnpm dsh plugin --profile reorigin add "$PWD/../reorigin/apps/dsh-plugin/dist"
+pnpm dsh plugin --profile reorigin add "$PWD/../reorigin/apps/dsh-plugin/release/dsh-plugin-reorigin-0.1.0.tgz"
 pnpm dsh --profile reorigin
 ```
 

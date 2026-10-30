@@ -88,6 +88,55 @@ const MIGRATIONS: readonly string[] = [
    CREATE TRIGGER ledger_append_only_delete BEFORE DELETE ON reward_ledger BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;`,
   // P2: why a quest was suggested (required from agents).
   `ALTER TABLE quests ADD COLUMN rationale TEXT NOT NULL DEFAULT '';`,
+  // P1 tail + P3 + P4: deadlines, growth tags, consented world sources, notices, memories.
+  `ALTER TABLE quests ADD COLUMN expires_at TEXT;
+   ALTER TABLE quests ADD COLUMN skill TEXT NOT NULL DEFAULT '';
+   ALTER TABLE quests ADD COLUMN source_key TEXT;
+   CREATE UNIQUE INDEX quests_by_source_key ON quests(host_id, source_key) WHERE source_key IS NOT NULL;
+   ALTER TABLE evidence ADD COLUMN corroborated_by TEXT;
+   ALTER TABLE hosts ADD COLUMN preferences_json TEXT;
+   CREATE TABLE consents (
+     id TEXT PRIMARY KEY,
+     host_id TEXT NOT NULL REFERENCES hosts(id),
+     source TEXT NOT NULL,
+     scope_ref TEXT NOT NULL,
+     author_email TEXT NOT NULL,
+     status TEXT NOT NULL,
+     granted_at TEXT NOT NULL,
+     revoked_at TEXT
+   );
+   CREATE TABLE world_events (
+     id TEXT PRIMARY KEY,
+     host_id TEXT NOT NULL REFERENCES hosts(id),
+     consent_id TEXT NOT NULL REFERENCES consents(id),
+     source TEXT NOT NULL,
+     external_id TEXT NOT NULL,
+     observed_at TEXT NOT NULL,
+     summary TEXT NOT NULL,
+     files_changed INTEGER NOT NULL,
+     UNIQUE (consent_id, external_id)
+   );
+   CREATE INDEX world_events_by_time ON world_events(host_id, observed_at);
+   CREATE TABLE notices (
+     id TEXT PRIMARY KEY,
+     host_id TEXT NOT NULL REFERENCES hosts(id),
+     kind TEXT NOT NULL,
+     title TEXT NOT NULL,
+     body TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     read_at TEXT,
+     source_key TEXT NOT NULL UNIQUE
+   );
+   CREATE TABLE memories (
+     id TEXT PRIMARY KEY,
+     host_id TEXT NOT NULL REFERENCES hosts(id),
+     kind TEXT NOT NULL,
+     text TEXT NOT NULL,
+     source_ref TEXT,
+     created_at TEXT NOT NULL,
+     forgotten_at TEXT
+   );
+   CREATE UNIQUE INDEX memories_by_source ON memories(host_id, source_ref) WHERE source_ref IS NOT NULL;`,
 ]
 
 export const SCHEMA_VERSION = MIGRATIONS.length

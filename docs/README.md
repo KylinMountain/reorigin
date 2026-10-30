@@ -23,7 +23,10 @@
 
 - **P0 已运行验证**（DSH `ce7073d`）：Re:Origin 以原生插件在 Web 与 Desktop 开发构建中提供侧栏入口与完整主工作区，Host/Client RPC、默认落地、自建 Client 构建均已实测；分发方式与签名版 Desktop 仍待验证。详见 [04](04-dsh-integration.md)。
 - **P1 首版已实现**：宿主绑定 → 任务 → 证据 → 确定性核验 → XP 幂等结算的闭环，在 DSH Web 上端到端走通。详见 [07](07-implementation.md#p1--最小可信成长闭环)。
-- **P2 第一刀已实现**：Agent 可通过 `reorigin_propose_quest` 向面板提议任务（宿主审阅后才生效），系统人格与宿主状态注入 prompt；真实模型对话待验证。详见 [07](07-implementation.md#p2--agent人格与长期记忆)。
+- **P2 已实现**：Agent 可通过 `reorigin_propose_quest` 向面板提议任务（宿主审阅后才生效），系统人格、宿主状态与长期记忆注入 prompt；真实模型对话待有 Key 时验证。
+- **P3 已实现**：本地 Git 仓库作为授权数据源，提交可作为已佐证证据，确定性规则在免打扰与每日上限内生成隐藏任务与提醒，撤权即停并可删除数据。
+- **P4 已实现**：觉醒仪式、升级演出、章节、成长轨迹、系统消息流、可选语音播报与窄屏适配。
+- **分发**：tarball 安装已验证。受阻项（需本人）：真实模型对话、签名版 Desktop。详见 [07](07-implementation.md) 与 [08](08-open-questions.md)。
 
 ## 原始整合稿
 

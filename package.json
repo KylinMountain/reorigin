@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "node apps/dsh-plugin/scripts/build.ts",
+    "pack": "node apps/dsh-plugin/scripts/build.ts --pack",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

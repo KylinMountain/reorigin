@@ -10,6 +10,7 @@
 // DSH builds its own client bundles with an unpublished tsdown preset
 // (packages/client/tsdown.client.ts); this reproduces only the subset we use:
 // no CSS modules, no assets, no split chunks.
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -83,3 +84,12 @@ writeFileSync(join(DIST, 'package.json'), `${JSON.stringify({
 writeFileSync(join(DIST, 'cordis.patch.yml'), `- insert:\n    - id: reorigin\n      name: ${PACKAGE_NAME}\n`)
 
 console.log(`built ${PACKAGE_NAME}@${version} → ${DIST}`)
+
+// --pack: an npm tarball under release/, installable with `dsh plugin add ./<file>.tgz`
+// or the Plugins page, without linking a checkout or running any build on install.
+if (process.argv.includes('--pack')) {
+  const release = join(ROOT, 'release')
+  mkdirSync(release, { recursive: true })
+  const file = execFileSync('npm', ['pack', '--silent', '--pack-destination', release], { cwd: DIST, encoding: 'utf8' }).trim()
+  console.log(`packed → ${join(release, file)}`)
+}

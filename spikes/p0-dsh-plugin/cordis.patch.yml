@@ -1,0 +1,6 @@
+# Re:Origin P0 spike: one Loader row whose package carries both halves.
+# The Host loads `.` (host.js); client-modules serves `./client` (client.js)
+# to the browser because the manifest declares `dsh.client`.
+- insert:
+    - id: reorigin
+      name: dsh-plugin-reorigin

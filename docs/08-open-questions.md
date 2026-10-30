@@ -2,9 +2,11 @@
 
 | 问题 | 当前状态 | 后续动作 |
 |---|---|---|
-| DSH Desktop 第三方 UI 插件 | 源码支持方向，尚未实测 | P0 冷启动/热重载/卸载 |
-| 插件 Manifest 与 Host/Client RPC | 未固定版本验证 | 锁定 SHA 后实现最小样例 |
-| 默认打开 Re:Origin 面板 | 未验证 | 实测布局和启动配置 |
+| DSH Desktop 第三方 UI 插件 | 运行验证（开发构建，`ce7073d`）：应用内安装、启用、冷重启通过 | 在打包签名版 Desktop 上复测 |
+| 插件 Manifest | 运行验证（`dsh.bundle` + `dsh.client` 单包两半） | 随 DSH 版本升级复测 |
+| Host/Client RPC | 待验证 | P1 前用最小 Remote 打通 Domain Core |
+| 浏览器 bundle 构建 | 格式已实测，但 DSH 构建预设未发布 | 自建等价构建步骤并锁定 DSH 版本 |
+| 默认打开 Re:Origin 面板 | 待验证（当前落在「新会话」） | 实测 `ctx.layout.selectPanel` 启动时调用 |
 | 多设备同步/冲突 | MVP 不支持 | 后续单独 ADR |
 | 真实技能评估 | 不存在通用客观标尺 | 定义领域化证据、置信度与申诉 |
 | 名称商标/域名 | 尚未正式核查 | 发布前检索与法律评审 |

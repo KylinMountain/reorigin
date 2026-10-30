@@ -1,0 +1,27 @@
+{
+  "name": "dsh-plugin-reorigin",
+  "version": "0.0.1",
+  "description": "P0 spike: minimal Re:Origin workspace inside DeepSeek Harness (sidebar entry + main panel)",
+  "private": true,
+  "type": "module",
+  "main": "host.js",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["host.js", "client.js", "cordis.patch.yml"],
+  "engines": {
+    "dsh": ">=0.2.2-alpha.0 <0.3.0"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

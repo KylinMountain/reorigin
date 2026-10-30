@@ -2,13 +2,13 @@
 
 | 问题 | 当前状态 | 后续动作 |
 |---|---|---|
-| DSH Desktop 第三方 UI 插件 | 运行验证（开发构建，`ce7073d`）：应用内安装、启用、冷重启通过 | 在打包签名版 Desktop 上复测 |
+| DSH Desktop 第三方 UI 插件 | 运行验证：开发构建与**打包版**（`ce7073d`，未签名 `.app`）均通过应用内安装、启用、冷重启 | — |
 | 插件 Manifest | 运行验证（`dsh.bundle` + `dsh.client` 单包两半） | 随 DSH 版本升级复测 |
 | Host/Client RPC | 运行验证（Web + Desktop 开发构建，SRC 回退 + `connection.rpc`）；Gateway 不做 Schema 校验 | 已由 Application 层 zod 校验兜底 |
 | 浏览器 bundle 构建 | 运行验证（自建 esbuild 构建，`apps/dsh-plugin`） | DSH 升级时核对平台共享模块表与加载格式 |
 | 默认打开 Re:Origin 面板 | 运行验证（Web，`main` 注册后 `selectPanel` 一次） | — |
 | 插件分发与升级 | 运行验证：tarball（`pnpm run pack`）在全新 profile 安装可用；同名升级需先卸载 | 公开发布时再决定是否上 npm |
-| 打包签名版 Desktop | **受阻**：需要签名与打包环境 | 发布前用签名构建复测安装与启动 |
+| 签名与公证 | 打包版（运行时 profile 解析、asar、ad-hoc 签名）已运行验证；Developer ID 签名与公证需要 DSH 的发布凭证 | 签名只作用于 DSH 应用本体，不改变插件加载路径；DSH 正式发布版上线后复测一次即可 |
 | Agent 工具与人格进入会话 prompt | 运行验证（脚本化 OpenAI 兼容端点 + DSH 真实 Agent 循环）：prompt 内容、工具调用、落库均确认 | — |
 | 真实模型的提议时机与语气 | 需要模型 Key（属于模型行为评估，不影响集成） | 有 Key 后按 07 · P2 的步骤观察并调整人格文本 |
 | Agent 提议的骚扰度 | 已限额（≤3 条待审、≤200 XP） | 实测后调整频率与语气 |

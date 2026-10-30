@@ -107,6 +107,6 @@ DSH 的 `ctx.remote.<namespace>` 依赖仓库内 typert 生成器产出的 `type
 ### 仍待验证
 
 - 分发：已选定 tarball（`pnpm run pack`，见 07 · 分发），在全新 profile 上安装验证；npm 发布与 `engines.dsh` 范围策略待公开发布时决定。
-- **打包签名版 Desktop**（运行时 profile 解析，不走开发构建的链接）上的安装与启动。
+- 打包版 Desktop（运行时 profile 解析）上的安装与启动已验证（见 07 · 打包版 Desktop）；仅 Developer ID 签名与公证未做。
 - 插件源码修改后的热重载开发体验。
 - `conversation.content` Factory 内嵌对话。

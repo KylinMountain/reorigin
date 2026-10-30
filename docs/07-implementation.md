@@ -88,10 +88,14 @@ reorigin/
 
 `pnpm run pack` 产出 `apps/dsh-plugin/release/dsh-plugin-reorigin-<version>.tgz`（只含 `host.js`、`client.js`、`package.json`、`cordis.patch.yml`），可用 `dsh plugin add ./x.tgz` 或原生「添加插件」安装，安装时不运行任何构建脚本；已在全新 profile 上从 tarball 安装验证。升级同名插件需先卸载。暂不发布到 npm。
 
-## 受阻项（需要宿主本人）
+## 打包版 Desktop（2026-10-31）
 
-- **真实模型对话**：需要模型 Key，步骤见上方 P2。
-- **签名版 Desktop**：需要 DSH 的签名与打包环境；开发构建已验证。
+用 DSH 的 `package-target.ts mac-arm64 --dir --unsigned` 构建打包版 `DeepSeek Harness.app`（asar、运行时 profile 解析、ad-hoc 签名，DSH 自带的打包冒烟测试全部通过）。以隔离的 `DSH_HOME` 与 `--user-data-dir` 启动，在应用内插件页从 tarball 安装并启用：侧栏入口、默认落地、Agent 集成「已连接」（peer 依赖由打包运行时解析）、宿主绑定写入 SQLite、退出后冷启动恢复，全部通过（[截图](assets/p1/packaged-desktop-panel.png)）。打包时 Electron 自带的 pnpm 需显式设置 `npm_config_https_proxy` 才能在代理后下载依赖。
+
+## 仍需本人的事项
+
+- **真实模型的行为评估**：集成已用脚本化模型验证；模型是否在合适时机提议、语气是否合适，需要模型 Key 观察。
+- **Developer ID 签名与公证**：需要 DSH 的发布凭证，只作用于 DSH 应用本体；插件加载已在打包版上验证。
 
 ## 验收与测试矩阵
 

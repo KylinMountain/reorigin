@@ -26,7 +26,7 @@
 - **P2 已实现**：Agent 可通过 `reorigin_propose_quest` 向面板提议任务（宿主审阅后才生效），系统人格、宿主状态与长期记忆注入 prompt；真实模型对话待有 Key 时验证。
 - **P3 已实现**：本地 Git 仓库作为授权数据源，提交可作为已佐证证据，确定性规则在免打扰与每日上限内生成隐藏任务与提醒，撤权即停并可删除数据。
 - **P4 已实现**：觉醒仪式、升级演出、章节、成长轨迹、系统消息流、可选语音播报与窄屏适配。
-- **分发**：tarball 安装已验证。受阻项（需本人）：真实模型对话、签名版 Desktop。详见 [07](07-implementation.md) 与 [08](08-open-questions.md)。
+- **分发**：tarball 安装已在 Web、开发版与打包版 Desktop 上验证；Agent 集成已用脚本化模型经 DSH 真实 Agent 循环验证。仍需本人：真实模型的行为评估、Developer ID 签名与公证。详见 [07](07-implementation.md) 与 [08](08-open-questions.md)。
 
 ## 原始整合稿
 

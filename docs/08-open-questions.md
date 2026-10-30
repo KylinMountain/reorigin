@@ -4,9 +4,11 @@
 |---|---|---|
 | DSH Desktop 第三方 UI 插件 | 运行验证（开发构建，`ce7073d`）：应用内安装、启用、冷重启通过 | 在打包签名版 Desktop 上复测 |
 | 插件 Manifest | 运行验证（`dsh.bundle` + `dsh.client` 单包两半） | 随 DSH 版本升级复测 |
-| Host/Client RPC | 运行验证（Web，SRC 回退 + `connection.rpc`）；无 Schema 校验 | Application 层自行校验命令入参；Desktop 复测 |
-| 浏览器 bundle 构建 | 格式已实测，但 DSH 构建预设未发布 | P1 自建等价构建步骤并锁定 DSH 版本 |
-| 默认打开 Re:Origin 面板 | 运行验证（Web，`main` 注册后 `selectPanel` 一次） | Desktop 复测 |
+| Host/Client RPC | 运行验证（Web + Desktop 开发构建，SRC 回退 + `connection.rpc`）；Gateway 不做 Schema 校验 | 已由 Application 层 zod 校验兜底 |
+| 浏览器 bundle 构建 | 运行验证（自建 esbuild 构建，`apps/dsh-plugin`） | DSH 升级时核对平台共享模块表与加载格式 |
+| 默认打开 Re:Origin 面板 | 运行验证（Web，`main` 注册后 `selectPanel` 一次） | — |
+| 插件分发与升级 | 本地目录安装可用；同名升级需先卸载 | 选定 npm / tarball 分发方式 |
+| 打包签名版 Desktop | 未验证 | 发布前用签名构建复测安装与启动 |
 | 多设备同步/冲突 | MVP 不支持 | 后续单独 ADR |
 | 真实技能评估 | 不存在通用客观标尺 | 定义领域化证据、置信度与申诉 |
 | 名称商标/域名 | 尚未正式核查 | 发布前检索与法律评审 |

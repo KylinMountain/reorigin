@@ -1,0 +1,15 @@
+{
+  "name": "@reorigin/dsh-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Builds the installable DSH bundle into dist/ (package name dsh-plugin-reorigin)",
+  "scripts": {
+    "build": "node scripts/build.ts"
+  },
+  "dependencies": {
+    "@reorigin/application": "workspace:*",
+    "@reorigin/domain": "workspace:*",
+    "@reorigin/infrastructure": "workspace:*"
+  }
+}

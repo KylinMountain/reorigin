@@ -1,5 +1,8 @@
 # P0 spike: Re:Origin as a native DSH plugin
 
+Superseded by [`apps/dsh-plugin`](../../apps/dsh-plugin), which is built from
+TypeScript and registers under the same package name; install one or the other.
+
 Throwaway proof that an out-of-tree package can add a sidebar entry and a full
 main workspace to DeepSeek Harness. Results and status live in
 [docs/04-dsh-integration.md](../../docs/04-dsh-integration.md); this file only

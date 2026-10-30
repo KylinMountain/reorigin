@@ -19,7 +19,10 @@
 
 ## 当前状态
 
-**v0.2，2026-10-30：设计基线。** DSH 的插件/Slots 机制有源码级依据，但 Re:Origin 的真实 Web/Desktop 端到端运行尚未完成；具体 Manifest、RPC 签名和打包命令应以 P0 锁定的 DSH 版本为准。
+**v0.2，2026-10-30：设计基线。**
+
+- **P0 已运行验证**（DSH `ce7073d`）：Re:Origin 以原生插件在 Web 与 Desktop 开发构建中提供侧栏入口与完整主工作区，Host/Client RPC、默认落地、自建 Client 构建均已实测；分发方式与签名版 Desktop 仍待验证。详见 [04](04-dsh-integration.md)。
+- **P1 首版已实现**：宿主绑定 → 任务 → 证据 → 确定性核验 → XP 幂等结算的闭环，在 DSH Web 上端到端走通。详见 [07](07-implementation.md#p1--最小可信成长闭环)。
 
 ## 原始整合稿
 

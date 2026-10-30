@@ -33,7 +33,7 @@ Re:Origin 需要 Agent、模型配置、会话、MCP 和插件生态，但这些
 - [x] 验证 DSH Web 与 Desktop（开发模式）冷启动。
 - [x] 验证原生插件管理、模型和会话入口不受损。
 - [x] 验证 Host/Client RPC 契约（SRC 回退路径，见下）。
-- [ ] 验证 Client 构建、打包、发布路径。
+- [x] 验证 Client 构建（自建 esbuild 构建，见下）；打包发布（npm/tarball）仍待定。
 - [x] 验证能否默认启动进入 Re:Origin 面板。
 
 **判定**：P0 通过后才能将插件接口与发布流程固化为实现规范。未通过时重新评审 UI 集成方案，不直接假定 Fork 是唯一解。
@@ -88,10 +88,18 @@ DSH 的 `ctx.remote.<namespace>` 依赖仓库内 typert 生成器产出的 `type
 
 `ctx.layout.selectPanel(id)` 只改内存中的选中状态，没有持久化；对未注册的 key 会抛错。在 `main` 注册之后调用一次（每次页面加载一次，重新启用插件时不抢焦点），冷启动即落在 Re:Origin，几秒后未被会话恢复抢回；点「新会话」正常切回对话。
 
+### 自建构建（运行验证，Web + Desktop 开发构建）
+
+[`apps/dsh-plugin/scripts/build.ts`](../apps/dsh-plugin/scripts/build.ts) 用 esbuild 产出可直接 `dsh plugin add` 的 `apps/dsh-plugin/dist/`：
+
+- `host.js`：ESM，内联 Re:Origin 各包与 zod；`@deepseek-ai/*` 与 `node:*` 保持外部。
+- `client.js`：CJS 包体外包 `__ModuleLoader__.load`；构建时检查 `require(...)` 只落在 DSH 平台共享模块表内，越界即失败。只复刻我们用到的子集（无 CSS Modules、无静态资源、无分块）。
+- 实测：Web 上完整走通 P1 闭环；Desktop 开发构建中 `node:sqlite`（Electron 内置 Node）读写正常、RPC 正常（[截图](assets/p1/desktop-system-panel.png)）。
+- **升级方式**：已安装同名插件时，原生「添加插件」会提示先卸载再重装；第三方插件目前没有原地升级。
+
 ### 仍待验证
 
-- 正式 Client 构建：用自有构建步骤产出 `__ModuleLoader__` 格式（P1 `apps/dsh-plugin`）。
 - 分发：npm 包 / `pnpm pack` tarball / GitHub `prepare` 构建三选一；`engines.dsh` 兼容范围策略。
-- **打包签名版 Desktop**（运行时 profile 解析，不走开发构建的链接）上的安装与启动；Desktop 上的 RPC 与默认落地。
+- **打包签名版 Desktop**（运行时 profile 解析，不走开发构建的链接）上的安装与启动。
 - 插件源码修改后的热重载开发体验。
 - `conversation.content` Factory 内嵌对话。

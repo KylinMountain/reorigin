@@ -1,4 +1,5 @@
 import { DomainError } from './errors.ts'
+import type { PersonaStyle } from './narrative.ts'
 
 /**
  * P3 · World. Only sources the Host explicitly granted are observed (docs/02),
@@ -57,11 +58,13 @@ export interface Preferences {
   readonly quietHours: { readonly start: number, readonly end: number } | null
   /** Upper bound on System-generated quest proposals per local day. */
   readonly systemProposalsPerDay: number
+  /** The System's voice in conversations. */
+  readonly persona: PersonaStyle
 }
 
-export const DEFAULT_PREFERENCES: Preferences = { quietHours: { start: 23, end: 8 }, systemProposalsPerDay: 1 }
+export const DEFAULT_PREFERENCES: Preferences = { quietHours: { start: 23, end: 8 }, systemProposalsPerDay: 1, persona: 'calm' }
 
-export function inQuietHours(localHour: number, preferences: Preferences): boolean {
+export function inQuietHours(localHour: number, preferences: Pick<Preferences, 'quietHours'>): boolean {
   const quiet = preferences.quietHours
   if (quiet === null || quiet.start === quiet.end) return false
   return quiet.start < quiet.end

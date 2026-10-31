@@ -55,6 +55,8 @@ export const EVENT_LABEL: Record<string, string> = {
   'skill.assessed.v1': '技能评估',
   'achievement.unlocked.v1': '解锁成就',
   'host.title_equipped.v1': '佩戴称号',
+  'quest.retracted.v1': '撤回完成',
+  'reward.reversed.v1': 'XP 补偿扣回',
 }
 
 /** Who caused an audit event, read from its causation id. */

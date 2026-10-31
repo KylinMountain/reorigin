@@ -180,6 +180,17 @@ const MIGRATIONS: readonly string[] = [
    CREATE TRIGGER assessments_append_only_delete BEFORE DELETE ON skill_assessments WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'assessments are append-only'); END;
    DROP TRIGGER achievements_append_only_delete;
    CREATE TRIGGER achievements_append_only_delete BEFORE DELETE ON achievements WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'achievements are append-only'); END;`,
+  // Corrections: a Host retracting a completion. One per quest, append-only like the ledger it compensates.
+  `CREATE TABLE corrections (
+     id TEXT PRIMARY KEY,
+     host_id TEXT NOT NULL REFERENCES hosts(id),
+     quest_id TEXT NOT NULL UNIQUE REFERENCES quests(id),
+     reason TEXT NOT NULL,
+     xp_reversed INTEGER NOT NULL,
+     corrected_at TEXT NOT NULL
+   );
+   CREATE TRIGGER corrections_append_only_update BEFORE UPDATE ON corrections BEGIN SELECT RAISE(ABORT, 'corrections are append-only'); END;
+   CREATE TRIGGER corrections_append_only_delete BEFORE DELETE ON corrections WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'corrections are append-only'); END;`,
 ]
 
 export const SCHEMA_VERSION = MIGRATIONS.length

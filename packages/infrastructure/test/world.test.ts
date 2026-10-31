@@ -163,6 +163,23 @@ describe('outbox, notices, and memory (P2/P4)', () => {
     expect(app.dashboard().unreadNotices).toBe(0)
   })
 
+  it('keeps the persona the Host chose at binding until they change it', () => {
+    const bound = run('BindHost', { displayName: 'K', goals: [], persona: 'mentor' })
+    if (bound.type === 'BindHost') hostId = bound.host.id
+    expect(app.agentBrief()).toMatchObject({ persona: { name: '温和导师' } })
+    run('UpdatePreferences', { quietHours: null, systemProposalsPerDay: 0 })
+    expect(app.dashboard().preferences).toMatchObject({ persona: 'mentor', systemProposalsPerDay: 0 })
+    run('UpdatePreferences', { quietHours: null, systemProposalsPerDay: 0, persona: 'terse' })
+    expect(app.agentBrief()).toMatchObject({ persona: { name: '极简终端' } })
+    expect(app.execute({ commandId: 'bad-persona', actor: 'host', issuedAt: clock.now(), schemaVersion: 1, type: 'UpdatePreferences', payload: { quietHours: null, systemProposalsPerDay: 0, persona: 'villain' }, hostId }))
+      .toMatchObject({ ok: false, error: { code: 'command/invalid' } })
+  })
+
+  it('defaults to the calm persona', () => {
+    bind()
+    expect(app.dashboard().preferences?.persona).toBe('calm')
+  })
+
   it('lets only the Host add and forget memories, and briefs the agent with active ones', () => {
     bind()
     const added = run('AddMemory', { text: '我更喜欢早上做深度工作' })

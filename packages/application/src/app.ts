@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   ACHIEVEMENT_RULE_VERSION,
   CONFIDENCE_LABEL,
+  PERSONA_STYLE_INFO,
   assessSkill,
   attachEvidence,
   bindHost,
@@ -15,14 +16,17 @@ import {
   levelForXp,
   proposeQuest,
   recordEvidence,
+  reverseSettlement,
   sameReading,
   settleQuest,
   tierLabel,
   transition,
   verifyQuest,
   type Achievement,
+  type AchievementFacts,
   type Chapter,
   type Consent,
+  type Correction,
   type Evidence,
   type Host,
   type LedgerEntry,
@@ -47,6 +51,13 @@ const DAY = 86_400_000
 export interface QuestView extends Quest {
   readonly lastVerification: StoredVerification | null
   readonly settled: boolean
+  /** Present when the Host took this completion back. */
+  readonly retraction: Correction | null
+}
+
+/** An unlock and whether today's facts still support it (a retraction can withdraw the basis). */
+export interface AchievementView extends Achievement {
+  readonly active: boolean
 }
 
 /** Completed quests grouped by their growth-track tag. A count of verified completions; the assessment lives in `skills`. */
@@ -70,9 +81,9 @@ export interface Dashboard {
   /** Latest evidence-based assessment per growth tag. */
   readonly skills: readonly SkillAssessment[]
   /** Badges and titles in the order they were unlocked. */
-  readonly achievements: readonly Achievement[]
-  /** The title the Host chose to display. */
-  readonly title: Achievement | null
+  readonly achievements: readonly AchievementView[]
+  /** The title the Host chose to display, while it is still supported. */
+  readonly title: AchievementView | null
   /** Recent audit events, newest first: what changed, when, and on whose command. */
   readonly audit: readonly StoredEvent[]
   readonly consents: readonly Consent[]
@@ -90,6 +101,7 @@ export type AgentBrief =
     readonly progress: LevelProgress
     readonly chapter: string
     readonly title: string | null
+    readonly persona: { readonly name: string, readonly voice: string }
     readonly skills: readonly { skill: string, tier: string, confidence: string, quests: number }[]
     readonly openQuests: readonly { title: string, type: Quest['type'], status: QuestStatus, source: Quest['source'] }[]
     readonly recentlyCompleted: readonly string[]
@@ -105,6 +117,7 @@ export type CommandOutcome =
   | { readonly type: 'DeleteHost', readonly removedRows: number }
   | { readonly type: 'VerifyQuest', readonly quest: Quest, readonly verification: StoredVerification }
   | { readonly type: 'SettleQuest', readonly entry: LedgerEntry, readonly granted: boolean }
+  | { readonly type: 'RetractCompletion', readonly correction: Correction }
   | { readonly type: 'GrantConsent' | 'RevokeConsent', readonly consent: Consent, readonly deletedEvents?: number }
   | { readonly type: 'UpdatePreferences', readonly preferences: Preferences }
   | { readonly type: 'AddMemory', readonly memory: Memory }
@@ -177,16 +190,19 @@ export class ReOriginApp {
         }
       }
       const ledger = tx.listLedger(host.id, 50)
-      const settledQuests = new Set(ledger.map(entry => entry.questId))
+      const questXp = tx.questXp(host.id)
+      const corrections = new Map(tx.listCorrections(host.id).map(correction => [correction.questId, correction]))
       const allQuests = tx.listQuests(host.id)
       const quests = allQuests.map(quest => ({
         ...quest,
         lastVerification: tx.latestVerification(quest.id) ?? null,
-        settled: settledQuests.has(quest.id),
+        settled: questXp.has(quest.id),
+        retraction: corrections.get(quest.id) ?? null,
       }))
       const progress = levelForXp(tx.totalXp(host.id))
       const notices = tx.listNotices(host.id, 20)
-      const achievements = tx.listAchievements(host.id)
+      const growth = this.growthState(tx, host)
+      const achievements = tx.listAchievements(host.id).map(item => ({ ...item, active: growth.supported.has(item.key) }))
       return {
         host,
         progress,
@@ -196,10 +212,10 @@ export class ReOriginApp {
         notices,
         unreadNotices: notices.filter(notice => notice.readAt === null).length,
         memories: tx.listMemories(host.id, 30),
-        growth: growthTracks(allQuests, ledger),
-        skills: tx.latestAssessments(host.id),
+        growth: growthTracks(allQuests.filter(quest => !corrections.has(quest.id)), questXp),
+        skills: growth.skills,
         achievements,
-        title: achievements.find(item => item.kind === 'title' && item.key === host.titleKey) ?? null,
+        title: achievements.find(item => item.kind === 'title' && item.key === host.titleKey && item.active) ?? null,
         audit: tx.listEvents(40),
         consents: tx.listConsents(host.id),
         preferences: tx.getPreferences(host.id),
@@ -223,6 +239,7 @@ export class ReOriginApp {
       const host = tx.getHost()
       if (host === undefined) return { bound: false }
       const quests = tx.listQuests(host.id)
+      const retracted = new Set(tx.listCorrections(host.id).map(correction => correction.questId))
       const open = quests.filter(quest => !isTerminal(quest.status))
       const progress = levelForXp(tx.totalXp(host.id))
       return {
@@ -231,12 +248,13 @@ export class ReOriginApp {
         goals: host.goals,
         progress,
         chapter: chapterFor(progress.level).title,
+        persona: PERSONA_STYLE_INFO[tx.getPreferences(host.id).persona],
         title: host.titleKey === null ? null : tx.listAchievements(host.id).find(item => item.key === host.titleKey)?.name ?? null,
-        skills: tx.latestAssessments(host.id).map(item => ({
+        skills: this.growthState(tx, host).skills.map(item => ({
           skill: item.skill, tier: tierLabel(item.tier), confidence: CONFIDENCE_LABEL[item.confidence], quests: item.basis.quests,
         })),
         openQuests: open.map(quest => ({ title: quest.title, type: quest.type, status: quest.status, source: quest.source })),
-        recentlyCompleted: quests.filter(quest => quest.status === 'COMPLETED').slice(0, 5).map(quest => quest.title),
+        recentlyCompleted: quests.filter(quest => quest.status === 'COMPLETED' && !retracted.has(quest.id)).slice(0, 5).map(quest => quest.title),
         memories: tx.listMemories(host.id, 8).map(memory => memory.text),
         pendingAgentProposals: open.filter(quest => quest.source === 'agent' && quest.status === 'PROPOSED').length,
         limits: { maxXp: AGENT_MAX_XP, maxPendingProposals: AGENT_MAX_PENDING_PROPOSALS },
@@ -397,26 +415,9 @@ export class ReOriginApp {
    */
   private advanceGrowth(tx: Transaction, host: Host, now: string): { assessed: number, unlocked: number } {
     const localDay = (iso: string): string => this.clock.localDay(iso)
-    const records: (SkillRecord & { skill: string })[] = tx.listQuests(host.id)
-      .filter(quest => quest.status === 'COMPLETED')
-      .map(quest => {
-        const verification = tx.latestVerification(quest.id)
-        const evidence = verification?.verdict === 'pass' ? tx.getEvidence(verification.acceptedEvidenceIds) : []
-        return {
-          questId: quest.id,
-          type: quest.type,
-          skill: quest.skill,
-          completedAt: quest.closedAt ?? now,
-          evidence: evidence.map(item => ({ id: item.id, corroborated: item.corroboratedBy !== null })),
-        }
-      })
-      .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
-
+    const records = this.completedRecords(tx, host)
     const latest = new Map(tx.latestAssessments(host.id).map(item => [item.skill, item]))
-    const bySkill = new Map<string, SkillRecord[]>()
-    for (const record of records) {
-      if (record.skill !== '') bySkill.set(record.skill, [...bySkill.get(record.skill) ?? [], record])
-    }
+    const bySkill = groupBySkill(records)
     let assessed = 0
     for (const [skill, list] of bySkill) {
       const reading = assessSkill(skill, list, localDay)
@@ -432,15 +433,7 @@ export class ReOriginApp {
       assessed += 1
     }
 
-    const unlocks = evaluateAchievements({
-      completed: records.map(record => ({
-        questId: record.questId, type: record.type, completedAt: record.completedAt,
-        corroborated: record.evidence.length > 0 && record.evidence.every(item => item.corroborated),
-      })),
-      level: levelForXp(tx.totalXp(host.id)).level,
-      skills: [...latest.values()].map(item => ({ skill: item.skill, tier: item.tier })),
-      localDay,
-    })
+    const unlocks = evaluateAchievements(this.achievementFacts(tx, host, records, [...latest.values()].filter(item => bySkill.has(item.skill))))
     const held = new Set(tx.listAchievements(host.id).map(item => item.key))
     let unlocked = 0
     for (const unlock of unlocks) {
@@ -451,6 +444,49 @@ export class ReOriginApp {
       unlocked += 1
     }
     return { assessed, unlocked }
+  }
+
+  /** Verified completions the Host has not retracted, oldest first, with the evidence each one counted. */
+  private completedRecords(tx: Transaction, host: Host): (SkillRecord & { skill: string })[] {
+    const retracted = new Set(tx.listCorrections(host.id).map(correction => correction.questId))
+    return tx.listQuests(host.id)
+      .filter(quest => quest.status === 'COMPLETED' && !retracted.has(quest.id))
+      .map(quest => {
+        const verification = tx.latestVerification(quest.id)
+        const evidence = verification?.verdict === 'pass' ? tx.getEvidence(verification.acceptedEvidenceIds) : []
+        return {
+          questId: quest.id,
+          type: quest.type,
+          skill: quest.skill,
+          completedAt: quest.closedAt ?? quest.proposedAt,
+          evidence: evidence.map(item => ({ id: item.id, corroborated: item.corroboratedBy !== null })),
+        }
+      })
+      .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+  }
+
+  private achievementFacts(tx: Transaction, host: Host, records: readonly SkillRecord[], skills: readonly SkillAssessment[]): AchievementFacts {
+    return {
+      completed: records.map(record => ({
+        questId: record.questId, type: record.type, completedAt: record.completedAt,
+        corroborated: record.evidence.length > 0 && record.evidence.every(item => item.corroborated),
+      })),
+      level: levelForXp(tx.totalXp(host.id)).level,
+      skills: skills.map(item => ({ skill: item.skill, tier: item.tier })),
+      localDay: iso => this.clock.localDay(iso),
+    }
+  }
+
+  /**
+   * Current assessments (skills that still have unretracted completions) and
+   * the achievement keys today's facts support. Unlocks are permanent records;
+   * whether one still holds is derived, never stored.
+   */
+  private growthState(tx: Transaction, host: Host): { skills: SkillAssessment[], supported: Set<string> } {
+    const records = this.completedRecords(tx, host)
+    const bySkill = groupBySkill(records)
+    const skills = tx.latestAssessments(host.id).filter(item => bySkill.has(item.skill))
+    return { skills, supported: new Set(evaluateAchievements(this.achievementFacts(tx, host, records, skills)).map(unlock => unlock.key)) }
   }
 
   /** Outbox consumer: turn audit events into Host-facing notices and milestone memories. Keyed, so redelivery is harmless. */
@@ -483,7 +519,9 @@ export class ReOriginApp {
       }
       case 'quest.completed.v1': {
         const quest = tx.getQuest(event.aggregateId)
-        if (quest !== undefined) {
+        // Retracted before this event was delivered: there is no milestone to remember.
+        const retracted = tx.listCorrections(host.id).some(correction => correction.questId === event.aggregateId)
+        if (quest !== undefined && !retracted) {
           tx.insertMemory({ id: this.ids.next('mem'), hostId: host.id, kind: 'milestone', text: `完成了「${quest.title}」${quest.skill === '' ? '' : `（${quest.skill}）`}`, sourceRef: quest.id, createdAt: now, forgottenAt: null })
         }
         return
@@ -509,6 +547,11 @@ export class ReOriginApp {
         notice('achievement', payload.kind === 'title' ? `【称号获得】${String(payload.name)}` : `【成就解锁】${String(payload.name)}`,
           `${String(payload.description)}。`, `achievement:${String(payload.key)}`)
         return
+      case 'quest.retracted.v1': {
+        const reversed = Number(payload.xpReversed)
+        notice('correction', '【纠错】已撤回完成', `「${String(payload.title)}」不再计入成长${reversed > 0 ? `，扣回 ${reversed} XP` : ''}。理由：${String(payload.reason)}`, `retracted:${event.aggregateId}`)
+        return
+      }
       case 'quest.transitioned.v1':
         if (payload.to === 'EXPIRED') notice('expired', '【任务过期】', `「${tx.getQuest(event.aggregateId)?.title ?? '任务'}」已超过期限。`, `expired:${event.aggregateId}`)
         return
@@ -525,7 +568,8 @@ export class ReOriginApp {
       if (tx.getHost() !== undefined) throw new ApplicationError('host/already-bound', 'a host is already bound')
       const host = bindHost({ id: this.ids.next('host'), displayName: command.payload.displayName, goals: command.payload.goals, at })
       tx.insertHost(host)
-      emit('host.bound.v1', host.id, { displayName: host.displayName })
+      if (command.payload.persona !== undefined) tx.setPreferences(host.id, { ...tx.getPreferences(host.id), persona: command.payload.persona })
+      emit('host.bound.v1', host.id, { displayName: host.displayName, persona: tx.getPreferences(host.id).persona })
       return { type: 'BindHost', host }
     }
 
@@ -588,7 +632,11 @@ export class ReOriginApp {
         return { type: 'RevokeConsent', consent: revoked, deletedEvents }
       }
       case 'UpdatePreferences': {
-        const preferences: Preferences = { quietHours: command.payload.quietHours, systemProposalsPerDay: command.payload.systemProposalsPerDay }
+        const preferences: Preferences = {
+          quietHours: command.payload.quietHours,
+          systemProposalsPerDay: command.payload.systemProposalsPerDay,
+          persona: command.payload.persona ?? tx.getPreferences(host.id).persona,
+        }
         tx.setPreferences(host.id, preferences)
         emit('preferences.updated.v1', host.id, preferences)
         return { type: 'UpdatePreferences', preferences }
@@ -616,7 +664,7 @@ export class ReOriginApp {
       }
       case 'EquipTitle': {
         const { titleKey } = command.payload
-        if (titleKey !== null && !tx.listAchievements(host.id).some(item => item.kind === 'title' && item.key === titleKey)) {
+        if (titleKey !== null && !(tx.listAchievements(host.id).some(item => item.kind === 'title' && item.key === titleKey) && this.growthState(tx, host).supported.has(titleKey))) {
           throw new ApplicationError('title/locked', `title ${titleKey} is not unlocked`)
         }
         tx.setHostTitle(host.id, titleKey)
@@ -692,16 +740,45 @@ export class ReOriginApp {
         return { type: 'VerifyQuest', quest: next, verification }
       }
       case 'SettleQuest': {
+        if (tx.listCorrections(host.id).some(correction => correction.questId === quest.id)) {
+          throw new ApplicationError('settlement/retracted', `quest ${quest.id} was retracted by the Host`)
+        }
         const { entry, inserted } = tx.insertLedgerEntry(settleQuest(quest, { id: this.ids.next('rwd'), at }))
         if (inserted) emit('reward.granted.v1', quest.id, { amount: entry.amount, idempotencyKey: entry.idempotencyKey, xpAfter: tx.totalXp(host.id) })
         return { type: 'SettleQuest', entry, granted: inserted }
+      }
+      case 'RetractCompletion': {
+        if (quest.status !== 'COMPLETED') throw new ApplicationError('correction/not-completed', `quest ${quest.id} is ${quest.status}, not COMPLETED`)
+        if (tx.listCorrections(host.id).some(correction => correction.questId === quest.id)) {
+          throw new ApplicationError('correction/duplicate', `quest ${quest.id} was already retracted`)
+        }
+        // Compensate every grant rather than editing it; the reversal key makes a second reversal impossible.
+        let xpReversed = 0
+        for (const grant of tx.ledgerFor(quest.id).filter(entry => entry.amount > 0)) {
+          const { entry, inserted } = tx.insertLedgerEntry(reverseSettlement(grant, { id: this.ids.next('rwd'), at }))
+          if (!inserted) continue
+          xpReversed += -entry.amount
+          emit('reward.reversed.v1', quest.id, { amount: entry.amount, idempotencyKey: entry.idempotencyKey, xpAfter: tx.totalXp(host.id) })
+        }
+        const correction: Correction = { id: this.ids.next('cor'), hostId: host.id, questId: quest.id, reason: command.payload.reason, xpReversed, correctedAt: at }
+        tx.insertCorrection(correction)
+        tx.forgetMemoriesFrom(host.id, quest.id, at)
+        emit('quest.retracted.v1', quest.id, { reason: correction.reason, xpReversed, title: quest.title })
+        return { type: 'RetractCompletion', correction }
       }
     }
   }
 }
 
-function growthTracks(quests: readonly Quest[], ledger: readonly LedgerEntry[]): GrowthTrack[] {
-  const xpByQuest = new Map(ledger.map(entry => [entry.questId, entry.amount]))
+function groupBySkill(records: readonly (SkillRecord & { skill: string })[]): Map<string, SkillRecord[]> {
+  const bySkill = new Map<string, SkillRecord[]>()
+  for (const record of records) {
+    if (record.skill !== '') bySkill.set(record.skill, [...bySkill.get(record.skill) ?? [], record])
+  }
+  return bySkill
+}
+
+function growthTracks(quests: readonly Quest[], xpByQuest: ReadonlyMap<string, number>): GrowthTrack[] {
   const tracks = new Map<string, { completions: number, xp: number, lastCompletedAt: string }>()
   for (const quest of quests) {
     if (quest.status !== 'COMPLETED') continue

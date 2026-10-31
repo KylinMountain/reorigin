@@ -2,7 +2,7 @@
 // (consented data sources and how proactive the System may be).
 import { useState, type FormEvent } from 'react'
 import type { Dashboard } from '@reorigin/application'
-import { CONFIDENCE_LABEL, SKILL_TIERS, tierLabel, type QuestStatus, type SkillTier } from '@reorigin/domain'
+import { CONFIDENCE_LABEL, PERSONA_STYLE_INFO, SKILL_TIERS, tierLabel, type PersonaStyle, type QuestStatus, type SkillTier } from '@reorigin/domain'
 import { setVoiceEnabled, voiceEnabled } from './Overlays.tsx'
 import { EVENT_LABEL, STATUS, eventActor, relativeTime, type Ctx } from './shared.ts'
 
@@ -75,10 +75,10 @@ export function Achievements({ dashboard, run, busy, client, hostId }: { dashboa
       <p className="ro-muted" style={{ margin: '4px 0 8px' }}>每一项都由确定性规则从经核验的记录中解锁，模型无法授予。称号可以佩戴在等级旁。</p>
       <ul className="ro-feed">
         {dashboard.achievements.map(item => (
-          <li key={item.id}>
-            <span className="ro-badge" data-tone={item.kind === 'title' ? 'accent' : 'ok'}>{item.kind === 'title' ? '称号' : '徽章'}</span>{' '}
-            <span className="ro-strong">{item.name}</span> <span className="ro-muted">{item.description} · {relativeTime(item.grantedAt)}</span>
-            {item.kind === 'title' && (
+          <li key={item.id} data-inactive={!item.active}>
+            <span className="ro-badge" data-tone={!item.active ? 'muted' : item.kind === 'title' ? 'accent' : 'ok'}>{item.kind === 'title' ? '称号' : '徽章'}</span>{' '}
+            <span className="ro-strong">{item.name}</span> <span className="ro-muted">{item.description} · {relativeTime(item.grantedAt)}{!item.active && ' · 依据已因撤回不再成立'}</span>
+            {item.kind === 'title' && item.active && (
               <button className="ro-link" disabled={busy} onClick={() => void run(
                 () => client.execute('EquipTitle', { titleKey: item.key === equipped ? null : item.key }, hostId),
                 item.key === equipped ? '已卸下称号。' : `已佩戴称号「${item.name}」。`,
@@ -131,6 +131,7 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
   const [start, setStart] = useState(preferences?.quietHours?.start ?? 23)
   const [end, setEnd] = useState(preferences?.quietHours?.end ?? 8)
   const [perDay, setPerDay] = useState(preferences?.systemProposalsPerDay ?? 1)
+  const [persona, setPersona] = useState<PersonaStyle>(preferences?.persona ?? 'calm')
   const [voice, setVoice] = useState(voiceEnabled)
   const active = dashboard.consents.filter(consent => consent.status === 'active')
 
@@ -183,19 +184,22 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
         <div><button className="ro-btn" data-primary type="submit" disabled={busy || repo.trim() === '' || email.trim() === ''}>授权该仓库</button></div>
       </form>
 
-      <p className="ro-section-title">主动程度</p>
+      <p className="ro-section-title">主动程度与人格</p>
       <label className="ro-inline"><input type="checkbox" checked={quiet} onChange={e => setQuiet(e.target.checked)} />免打扰时段内不生成提醒和系统任务</label>
       <div className="ro-grid2">
         <label>免打扰开始<select className="ro-input" value={start} disabled={!quiet} onChange={e => setStart(Number(e.target.value))}>{hours.map(hour => <option key={hour} value={hour}>{hour}:00</option>)}</select></label>
         <label>免打扰结束<select className="ro-input" value={end} disabled={!quiet} onChange={e => setEnd(Number(e.target.value))}>{hours.map(hour => <option key={hour} value={hour}>{hour}:00</option>)}</select></label>
         <label>每天最多系统任务<select className="ro-input" value={perDay} onChange={e => setPerDay(Number(e.target.value))}>{[0, 1, 2, 3].map(count => <option key={count} value={count}>{count}</option>)}</select></label>
+        <label>系统人格（对话语气）<select className="ro-input" value={persona} onChange={e => setPersona(e.target.value as PersonaStyle)}>
+          {Object.entries(PERSONA_STYLE_INFO).map(([style, info]) => <option key={style} value={style}>{info.name}</option>)}
+        </select></label>
       </div>
       <label className="ro-inline"><input type="checkbox" checked={voice} onChange={e => { setVoiceEnabled(e.target.checked); setVoice(e.target.checked) }} />系统播报：觉醒与升级时朗读（仅本浏览器）</label>
       <div className="ro-row">
         <button className="ro-btn" data-primary disabled={busy} onClick={() => void run(
-          () => client.execute('UpdatePreferences', { quietHours: quiet ? { start, end } : null, systemProposalsPerDay: perDay }, hostId),
+          () => client.execute('UpdatePreferences', { quietHours: quiet ? { start, end } : null, systemProposalsPerDay: perDay, persona }, hostId),
           '设置已保存。',
-        )}>保存主动程度</button>
+        )}>保存</button>
         <button className="ro-btn" disabled={busy} onClick={() => void run(() => client.syncNow(), '已与授权数据源同步。')}>立即同步</button>
       </div>
 
@@ -270,10 +274,11 @@ function describeEvent(payload: unknown): string {
   const fields = payload as Record<string, unknown>
   const status = (value: string): string => STATUS[value as QuestStatus]?.label ?? value
   if (typeof fields.from === 'string' && typeof fields.to === 'string') return `：${status(fields.from)} → ${status(fields.to)}`
+  if (typeof fields.reason === 'string') return `：${fields.reason}`
   if (typeof fields.title === 'string') return `：「${fields.title}」`
   if (typeof fields.name === 'string') return `：${fields.name}`
   if (typeof fields.skill === 'string') return `：${fields.skill}`
   if (typeof fields.verdict === 'string') return `：${VERDICT[fields.verdict] ?? fields.verdict}`
-  if (typeof fields.amount === 'number') return `：+${fields.amount}`
+  if (typeof fields.amount === 'number') return `：${fields.amount > 0 ? '+' : ''}${fields.amount}`
   return ''
 }

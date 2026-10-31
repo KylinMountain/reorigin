@@ -87,5 +87,8 @@ export const STYLES = `
 @media (prefers-reduced-motion: reduce) { .ro-overlay, .ro-line, .ro-level-big, .ro-bar > span { animation: none; transition: none; } }
 .ro-toast { border-color: var(--ro-ok); }
 .ro-btn.ro-danger { border-color: var(--ro-err); color: var(--ro-err); }
+.ro-persona { border: 1px solid var(--ro-border); border-radius: var(--ro-radius); padding: 8px 12px 10px; display: grid; gap: 6px; margin: 0; }
+.ro-persona legend { font-size: 12px; color: var(--ro-fg-2); padding: 0 4px; }
+.ro-feed li[data-inactive="true"] .ro-strong { color: var(--ro-fg-3); text-decoration: line-through; }
 .ro-audit { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 `

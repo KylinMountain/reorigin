@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { ApplicationError, type Memory, type Notice, type StoredEvent, type StoredVerification, type Store, type Transaction } from '@reorigin/application'
-import { DEFAULT_PREFERENCES, type Achievement, type Consent, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type SkillAssessment, type WorldEvent } from '@reorigin/domain'
+import { DEFAULT_PREFERENCES, type Achievement, type Consent, type Correction, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type SkillAssessment, type WorldEvent } from '@reorigin/domain'
 import { migrate } from './migrations.ts'
 
 type Row = Record<string, SQLInputValue>
@@ -120,6 +120,13 @@ function createTransaction(db: DatabaseSync): Transaction {
     totalXp(hostId) {
       return Number(one(`SELECT COALESCE(SUM(amount), 0) AS xp FROM reward_ledger WHERE host_id = ? AND reward_type = 'xp'`, hostId)!.xp)
     },
+    questXp(hostId) {
+      const rows = all(`SELECT quest_id, SUM(amount) AS net FROM reward_ledger WHERE host_id = ? AND reward_type = 'xp' GROUP BY quest_id`, hostId)
+      return new Map(rows.map(row => [text(row.quest_id), Number(row.net)]))
+    },
+    ledgerFor(questId) {
+      return all('SELECT * FROM reward_ledger WHERE quest_id = ? ORDER BY granted_at, rowid', questId).map(toLedgerEntry)
+    },
     listLedger(hostId, limit) {
       return all('SELECT * FROM reward_ledger WHERE host_id = ? ORDER BY granted_at DESC, rowid DESC LIMIT ?', hostId, limit).map(toLedgerEntry)
     },
@@ -211,6 +218,9 @@ function createTransaction(db: DatabaseSync): Transaction {
     listMemories(hostId, limit) {
       return all('SELECT * FROM memories WHERE host_id = ? AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?', hostId, limit).map(toMemory)
     },
+    forgetMemoriesFrom(hostId, sourceRef, at) {
+      return run('UPDATE memories SET forgotten_at = ? WHERE host_id = ? AND source_ref = ? AND forgotten_at IS NULL', at, hostId, sourceRef)
+    },
     forgetMemory(hostId, memoryId, at) {
       return run('UPDATE memories SET forgotten_at = ? WHERE id = ? AND host_id = ? AND forgotten_at IS NULL', at, memoryId, hostId) === 1
     },
@@ -239,6 +249,17 @@ function createTransaction(db: DatabaseSync): Transaction {
     },
     listAchievements(hostId) {
       return all('SELECT * FROM achievements WHERE host_id = ? ORDER BY granted_at, rowid', hostId).map(toAchievement)
+    },
+
+    insertCorrection(correction) {
+      run(`INSERT INTO corrections (id, host_id, quest_id, reason, xp_reversed, corrected_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        correction.id, correction.hostId, correction.questId, correction.reason, correction.xpReversed, correction.correctedAt)
+    },
+    listCorrections(hostId) {
+      return all('SELECT * FROM corrections WHERE host_id = ? ORDER BY corrected_at, rowid', hostId).map(row => ({
+        id: text(row.id), hostId: text(row.host_id), questId: text(row.quest_id), reason: text(row.reason),
+        xpReversed: Number(row.xp_reversed), correctedAt: text(row.corrected_at),
+      }) satisfies Correction)
     },
 
     listEvents(limit) {
@@ -276,12 +297,12 @@ function createTransaction(db: DatabaseSync): Transaction {
 
 /** Every table holding the Host's records; one Host per installation, so "the Host's" means all rows. */
 const PERSONAL_TABLES = [
-  'hosts', 'quests', 'evidence', 'verifications', 'reward_ledger', 'skill_assessments', 'achievements',
+  'hosts', 'quests', 'evidence', 'verifications', 'reward_ledger', 'corrections', 'skill_assessments', 'achievements',
   'consents', 'world_events', 'notices', 'memories', 'events',
 ] as const
 /** Children before parents, so foreign keys hold at every step. Command results go too: they echo payloads. */
 const PURGE_ORDER = [
-  'outbox', 'events', 'processed_commands', 'reward_ledger', 'verifications', 'evidence', 'skill_assessments', 'achievements',
+  'outbox', 'events', 'processed_commands', 'corrections', 'reward_ledger', 'verifications', 'evidence', 'skill_assessments', 'achievements',
   'notices', 'memories', 'world_events', 'consents', 'quests', 'hosts',
 ] as const
 

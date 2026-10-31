@@ -68,6 +68,18 @@ ACCEPTED / IN_PROGRESS → PAUSED → IN_PROGRESS 或 CANCELLED（暂停期间�
 - **删除**：`DeleteHost`（仅宿主，须重新输入宿主称呼）在一个事务中清空全部表，包括只追加的事件、账本、评估与成就，以及回放用的命令结果——审计记录同样是宿主的数据，删除后不保留删除记录。只追加触发器改为「`purge_guard` 表为空时拒绝删除」，清除过程临时写入一行守卫、结束前移除，其余时间约束不变。存储开启 `secure_delete`，Host 在删除后执行 WAL `TRUNCATE` 检查点，原始字节不留在数据库文件或日志中（测试直接扫描文件字节）。
 - **审计视图**：`Dashboard.audit` 提供最近 40 条事件；面板按 causation 标注由宿主、Agent 还是系统引起。
 
+## 纠错与补偿（2026-10-31）
+
+- **撤回完成** `RetractCompletion`（仅宿主，须写理由）：只作用于 `COMPLETED`。任务状态与核验记录不变；追加一条 `corrections` 记录（每个任务至多一条，只追加），并为每笔 XP 入账追加一笔负向补偿（`reverseSettlement`，幂等键 `<原键>:reversal`，因此至多补偿一次）。未结算的任务撤回后不能再结算。
+- **影响**：撤回的任务不再计入技能评估、成长轨迹、Agent 摘要与成就判定；由它生成的里程碑记忆被忘记（若撤回早于 Outbox 投递，则不会生成）。等级随净 XP 回落。
+- **成就的有效性是推导出来的**：解锁记录永久保留，但面板与佩戴只认「按当前事实仍成立」的成就（`AchievementView.active`）；例如撤回导致技能等级或等级回落，对应称号显示为不再成立并自动卸下。
+- **对驳回的申诉暂不实现**：`deterministic-v2` 只在证据属于其他宿主时驳回，而一个安装只有一个宿主；用同样的证据和同样的确定性规则重核，结论必然相同。出现可争议的驳回规则（例如模型辅助核验或第二个数据源）时再设计。
+- **新增**：表 `corrections`；事件 `quest.retracted.v1`、`reward.reversed.v1`；错误码 `correction/not-completed`、`correction/duplicate`、`settlement/retracted`。
+
+## 系统人格（2026-10-31）
+
+`Preferences.persona`：`calm`（冷静系统，默认）、`mentor`（温和导师）、`terse`（极简终端）。绑定时选择（`BindHost.payload.persona`），之后在 `UpdatePreferences` 中更换（省略则保持）。人格只进入 Agent 的宿主状态（语气说明），静态人格段落中的能力边界对所有人格相同。
+
 ## 奖励结算
 
 建议奖励幂等键为 `host_id + quest_id + reward_rule_version + reward_type`。XP 和徽章受 Reward Engine 裁决；Growth Engine 才能维护真实技能的有证据评估。事件和账本与 Quest 状态写入必须具有可恢复的一致性协议。

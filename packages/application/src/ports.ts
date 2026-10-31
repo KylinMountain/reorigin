@@ -1,10 +1,10 @@
-import type { Achievement, Consent, Evidence, Host, LedgerEntry, Preferences, Quest, SkillAssessment, Verification, WorldEvent } from '@reorigin/domain'
+import type { Achievement, Consent, Correction, Evidence, Host, LedgerEntry, Preferences, Quest, SkillAssessment, Verification, WorldEvent } from '@reorigin/domain'
 
 /** A System message in the panel feed; one per source key. */
 export interface Notice {
   readonly id: string
   readonly hostId: string
-  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement'
+  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement' | 'correction'
   readonly title: string
   readonly body: string
   readonly createdAt: string
@@ -56,6 +56,8 @@ export type EventType =
   | 'host.title_equipped.v1'
   | 'quest.paused.v1'
   | 'quest.resumed.v1'
+  | 'quest.retracted.v1'
+  | 'reward.reversed.v1'
 
 export interface StoredVerification extends Verification {
   readonly id: string
@@ -89,6 +91,12 @@ export interface Transaction {
   insertLedgerEntry(entry: LedgerEntry): { entry: LedgerEntry, inserted: boolean }
   totalXp(hostId: string): number
   listLedger(hostId: string, limit: number): LedgerEntry[]
+  /** Net XP per settled quest (grants plus reversals); a quest is absent if it was never settled. */
+  questXp(hostId: string): Map<string, number>
+  ledgerFor(questId: string): LedgerEntry[]
+
+  insertCorrection(correction: Correction): void
+  listCorrections(hostId: string): Correction[]
 
   appendEvent(event: StoredEvent): void
   /** Outbox rows not yet dispatched, oldest first. */
@@ -122,6 +130,8 @@ export interface Transaction {
   insertMemory(memory: Memory): boolean
   listMemories(hostId: string, limit: number): Memory[]
   forgetMemory(hostId: string, memoryId: string, at: string): boolean
+  /** Forget every memory derived from `sourceRef` (e.g. a retracted quest's milestone); returns how many. */
+  forgetMemoriesFrom(hostId: string, sourceRef: string, at: string): number
 
   /** Assessments are append-only; a re-reading adds a row, and the latest row per skill is current. */
   insertAssessment(assessment: SkillAssessment): void

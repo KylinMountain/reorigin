@@ -163,3 +163,85 @@ describe('achievements and titles on SQLite', () => {
     db.close()
   })
 })
+
+describe('retracting a completion (corrections)', () => {
+  const quests = () => app.dashboard().quests
+
+  it('compensates the XP instead of editing history, once', () => {
+    const questId = complete(1)
+    expect(app.dashboard().progress.xp).toBe(50)
+    expect(attempt('RetractCompletion', { questId, reason: '证据填错了' }, 'agent')).toMatchObject({ ok: false, error: { code: 'command/forbidden' } })
+    expect(run('RetractCompletion', { questId, reason: '证据填错了' })).toMatchObject({ correction: { xpReversed: 50 } })
+    app.tick()
+
+    const dashboard = app.dashboard()
+    expect(dashboard.progress.xp).toBe(0)
+    expect(dashboard.ledger.map(entry => entry.amount)).toEqual([-50, 50])
+    expect(dashboard.quests[0]).toMatchObject({ status: 'COMPLETED', settled: true, retraction: { reason: '证据填错了' }, lastVerification: { verdict: 'pass' } })
+    expect(dashboard.memories).toEqual([])
+    expect(dashboard.growth).toEqual([])
+    expect(dashboard.notices[0]).toMatchObject({ kind: 'correction', title: '【纠错】已撤回完成' })
+    expect(app.agentBrief()).toMatchObject({ recentlyCompleted: [] })
+
+    expect(attempt('RetractCompletion', { questId, reason: '再来一次' })).toMatchObject({ ok: false, error: { code: 'correction/duplicate' } })
+    expect(app.dashboard().progress.xp).toBe(0)
+    const db = new DatabaseSync(path)
+    expect(() => db.exec('DELETE FROM corrections')).toThrow(/append-only/)
+    db.close()
+  })
+
+  it('blocks settling a retracted quest and only retracts completions', () => {
+    const proposed = run('ProposeQuest', { type: 'side', title: 'open', xp: 40, criteria: [{ kind: 'manual', minCount: 1, description: 'n' }] })
+    if (proposed.type !== 'ProposeQuest') throw new Error('unexpected')
+    expect(attempt('RetractCompletion', { questId: proposed.quest.id, reason: '还没做' })).toMatchObject({ ok: false, error: { code: 'correction/not-completed' } })
+
+    run('AcceptQuest', { questId: proposed.quest.id })
+    run('SubmitQuestEvidence', { questId: proposed.quest.id, evidence: [{ kind: 'manual', ref: 'did it', observedAt: clock.now(), attested: true }] })
+    run('VerifyQuest', { questId: proposed.quest.id })
+    // Retracted before settlement and before the outbox ran: nothing paid, no milestone appears later.
+    expect(run('RetractCompletion', { questId: proposed.quest.id, reason: '其实没做完' })).toMatchObject({ correction: { xpReversed: 0 } })
+    expect(attempt('SettleQuest', { questId: proposed.quest.id })).toMatchObject({ ok: false, error: { code: 'settlement/retracted' } })
+    app.tick()
+    expect(app.dashboard()).toMatchObject({ memories: [], progress: { xp: 0 }, achievements: [] })
+  })
+
+  it('re-reads the skill and withdraws support for what the retraction undercuts', () => {
+    const first = complete(1)
+    nowMs += 3 * DAY
+    complete(2)
+    nowMs += 4 * DAY
+    complete(3)
+    run('EquipTitle', { titleKey: 'skill:测试工程:practice' })
+    expect(app.dashboard().title).toMatchObject({ name: '测试工程·实践者', active: true })
+
+    run('RetractCompletion', { questId: first, reason: '那次其实是同事写的' })
+    app.tick()
+    const dashboard = app.dashboard()
+    expect(dashboard.skills[0]).toMatchObject({ tier: 1, basis: { quests: 2 } })
+    // The unlock stays on record, but no longer holds, so it is not displayed or equippable.
+    expect(dashboard.achievements.find(item => item.key === 'skill:测试工程:practice')).toMatchObject({ active: false })
+    expect(dashboard.achievements.find(item => item.key === 'first_quest')).toMatchObject({ active: true })
+    expect(dashboard.title).toBeNull()
+    expect(attempt('EquipTitle', { titleKey: 'skill:测试工程:practice' })).toMatchObject({ ok: false, error: { code: 'title/locked' } })
+  })
+
+  it('drops the assessment of a tag whose every completion was retracted', () => {
+    const only = complete(1, { skill: '写作' })
+    expect(app.dashboard().skills).toHaveLength(1)
+    run('RetractCompletion', { questId: only, reason: '不算' })
+    expect(app.dashboard().skills).toEqual([])
+    expect(app.agentBrief()).toMatchObject({ skills: [] })
+    expect(quests()[0]!.retraction).not.toBeNull()
+  })
+})
+
+describe('settlement status beyond the recent ledger page', () => {
+  it('still shows the oldest quest as settled after more than 50 settlements', () => {
+    const ids: string[] = []
+    for (let n = 0; n < 52; n += 1) ids.push(complete(n, { skill: '' }))
+    const dashboard = app.dashboard()
+    expect(dashboard.ledger).toHaveLength(50)
+    expect(dashboard.quests.every(quest => quest.settled)).toBe(true)
+    expect(dashboard.growth).toEqual([expect.objectContaining({ completions: 52, xp: 52 * 50 })])
+  })
+})

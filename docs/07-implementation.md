@@ -106,6 +106,16 @@ reorigin/
 - **验证**：同上一节的独立页面 + Playwright：暂停任务卡片、审计展开、导出（下载文件各表行数正确）、删除按钮在确认前禁用、删除后回到绑定页、无页面错误。截图：[暂停的任务](assets/sovereignty/paused-quest.png)、[我的数据](assets/sovereignty/my-data.png)。尚未在 DSH Web 中复测。
 - **未做**：导入（从导出文件恢复）、按时间范围或按表的部分删除、数据保留期限的自动清理。
 
+## 纠错、系统人格（2026-10-31）
+
+规则见 05 章「纠错与补偿」「系统人格」。
+
+- **撤回完成**：已完成的任务卡片可「撤回」，填写理由后确认；面板说明不会改写历史、会追加补偿。撤回后卡片标「已撤回」与扣回的 XP，失去依据的成就划线显示「依据已因撤回不再成立」。审计记录显示撤回与补偿。
+- **系统人格**：绑定页三选一，设置中可更换；Agent 宿主状态中多一行「系统人格」。
+- **顺带修复**：「已结算」与成长轨迹 XP 原先只看最近 50 笔账本，超过 50 次结算后旧任务会重新显示「领取奖励」（重复领取被幂等拦下，不会多发）、成长轨迹少算 XP；改为按任务汇总的 `questXp` 查询，并加回归测试（52 次结算）。
+- **测试**：补偿只发生一次且历史不变、Agent 不能撤回、非完成任务不能撤回、撤回后不能结算、撤回早于 Outbox 投递不生成里程碑、撤回后技能评估重读与称号失效且不可佩戴、整标签撤回后评估消失、`corrections` 只追加；人格默认值、绑定选择、更新时省略保持、非法值拒绝、提示文本。
+- **验证**：独立页面 + Playwright 走完撤回流程（XP 320 → 240、Lv.3 → Lv.2，两个称号失效，其余徽章保留）与绑定页人格选项，无页面错误。截图：[撤回的任务](assets/corrections/retracted-quest.png)、[撤回后的成就](assets/corrections/achievements-after.png)、[绑定页人格](assets/corrections/bind-persona.png)。尚未在 DSH Web 中复测，真实模型下人格语气差异需要模型 Key 评估。
+
 ## 分发（P0 补齐）
 
 `pnpm run pack` 产出 `apps/dsh-plugin/release/dsh-plugin-reorigin-<version>.tgz`（只含 `host.js`、`client.js`、`package.json`、`cordis.patch.yml`），可用 `dsh plugin add ./x.tgz` 或原生「添加插件」安装，安装时不运行任何构建脚本；已在全新 profile 上从 tarball 安装验证。升级同名插件需先卸载。暂不发布到 npm。

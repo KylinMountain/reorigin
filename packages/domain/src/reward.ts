@@ -36,6 +36,27 @@ export function settleQuest(quest: Quest, input: { id: string, at: string }): Le
   }
 }
 
+/**
+ * The compensating entry for a grant the Host retracted (docs/05: correct by
+ * compensation, never by rewriting). Its key derives from the grant's, so a
+ * grant can be reversed at most once.
+ */
+export function reverseSettlement(grant: LedgerEntry, input: { id: string, at: string }): LedgerEntry {
+  if (grant.amount <= 0) throw new DomainError('settlement/not-completed', `ledger entry ${grant.id} is not a grant`)
+  return { ...grant, id: input.id, amount: -grant.amount, idempotencyKey: `${grant.idempotencyKey}:reversal`, grantedAt: input.at }
+}
+
+/** A Host-initiated correction of a completed quest. The quest's history stays; this record and the compensation say what changed. */
+export interface Correction {
+  readonly id: string
+  readonly hostId: string
+  readonly questId: string
+  readonly reason: string
+  /** XP taken back by the compensating ledger entry; 0 when the quest had not been settled. */
+  readonly xpReversed: number
+  readonly correctedAt: string
+}
+
 export interface LevelProgress {
   readonly level: number
   readonly xp: number

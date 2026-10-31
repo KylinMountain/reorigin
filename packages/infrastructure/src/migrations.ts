@@ -191,6 +191,19 @@ const MIGRATIONS: readonly string[] = [
    );
    CREATE TRIGGER corrections_append_only_update BEFORE UPDATE ON corrections BEGIN SELECT RAISE(ABORT, 'corrections are append-only'); END;
    CREATE TRIGGER corrections_append_only_delete BEFORE DELETE ON corrections WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'corrections are append-only'); END;`,
+  // Agent review: the Host opens a quest's evidence to an agent, which may leave advisory notes.
+  `CREATE TABLE review_grants (
+     quest_id TEXT PRIMARY KEY REFERENCES quests(id),
+     allowed INTEGER NOT NULL,
+     updated_at TEXT NOT NULL
+   );
+   CREATE TABLE review_notes (
+     id TEXT PRIMARY KEY,
+     host_id TEXT NOT NULL REFERENCES hosts(id),
+     quest_id TEXT NOT NULL REFERENCES quests(id),
+     note TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );`,
 ]
 
 export const SCHEMA_VERSION = MIGRATIONS.length

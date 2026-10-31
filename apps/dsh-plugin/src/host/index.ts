@@ -10,7 +10,8 @@ import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol'
 import { ReOriginApp, type CommandOutcome, type Dashboard, type DataExport, type Result, type TickReport } from '@reorigin/application'
-import { SqliteStore, isGitRepository, randomIds, readCommits, systemClock } from '@reorigin/infrastructure'
+import { SqliteStore, isGitRepository, isGithubRepository, readMergedPulls, randomIds, readCommits, systemClock } from '@reorigin/infrastructure'
+import { githubSlug } from '@reorigin/domain'
 import { REMOTE_METHODS, REMOTE_NAMESPACE } from '../shared/remote.ts'
 import { AgentLink, agentPlugin, type AgentStatus } from './agent.ts'
 
@@ -62,6 +63,13 @@ export default class ReOriginService extends Service {
     return this.app.exportData()
   }
 
+  /** Restore an export into an empty installation. */
+  importData(document: unknown): Result<{ rows: number }> {
+    const result = this.app.importData(document)
+    if (result.ok) this.store.checkpoint()
+    return result
+  }
+
   agentStatus(): AgentStatus {
     return this.agentLink.status()
   }
@@ -69,12 +77,14 @@ export default class ReOriginService extends Service {
   /** The browser speaks for the Host, never for an agent or the system, whatever it claims. */
   async execute(command: unknown): Promise<Result<CommandOutcome>> {
     const asHost = typeof command === 'object' && command !== null ? { ...command, actor: 'host' } as Record<string, unknown> : command
-    // A repository grant must point at a real work tree; checked here because the Application layer cannot run git.
+    // A grant must point at something real; checked here because the Application layer cannot reach git or GitHub.
     if (isObject(asHost) && asHost.type === 'GrantConsent' && isObject(asHost.payload)) {
-      const path = asHost.payload.scopeRef
-      if (typeof path !== 'string' || !(await isGitRepository(path))) {
-        return { ok: false, error: { code: 'command/invalid', message: `not a git repository: ${String(path)}` } }
-      }
+      const { source, scopeRef } = asHost.payload
+      const slug = typeof scopeRef === 'string' ? githubSlug(scopeRef) : null
+      const reachable = source === 'github_repo'
+        ? slug !== null && await isGithubRepository(slug)
+        : typeof scopeRef === 'string' && await isGitRepository(scopeRef)
+      if (!reachable) return { ok: false, error: { code: 'command/invalid', message: `cannot reach ${String(source)} ${String(scopeRef)}` } }
     }
     const result = this.app.execute(asHost)
     // Erased rows must not survive in the write-ahead log either.
@@ -90,8 +100,9 @@ export default class ReOriginService extends Service {
     const since = new Date(Date.now() - COLLECT_WINDOW_DAYS * 86_400_000).toISOString()
     for (const consent of this.app.activeConsents()) {
       try {
-        const commits = await readCommits({ repo: consent.scopeRef, authorEmail: consent.authorEmail, since })
-        const result = this.app.ingestCommits(consent.id, commits)
+        const result = consent.source === 'github_repo'
+          ? this.app.ingestPullRequests(consent.id, await readMergedPulls({ slug: consent.scopeRef, author: consent.author, since }))
+          : this.app.ingestCommits(consent.id, await readCommits({ repo: consent.scopeRef, author: consent.author, since }))
         if (result.ok) collected += result.value.added
       } catch (error) {
         console.warn(`[reorigin] collecting ${consent.scopeRef} failed:`, error)

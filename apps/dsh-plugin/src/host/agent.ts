@@ -4,7 +4,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ReOriginApp } from '@reorigin/application'
-import { PERSONA, TOOL_NAME, TOOL_PARAMETERS, describeProposal, formatBrief, toProposalPayload, type ToolArgs } from './persona.ts'
+import { LIST_REVIEW_TOOL, NOTE_REVIEW_TOOL, PERSONA, TOOL_NAME, TOOL_PARAMETERS, describeNote, describeProposal, formatBrief, formatReviewable, toProposalPayload, type ToolArgs } from './persona.ts'
 
 /** Host-plane orders: the persona after first-party guidance, before the deployment suffix (10200). */
 const PERSONA_ORDER = 10100
@@ -59,6 +59,34 @@ export function agentPlugin(app: ReOriginApp, link: AgentLink) {
           return describeProposal(app.proposeFromAgent(exec.callId, toProposalPayload(args)))
         },
       })), 'reorigin: propose tool')
+      // Review tools see only quests the Host opened per quest; everything else stays out of the model's reach.
+      ctx.effect(() => ctx.tools.register(defineTool({
+        name: LIST_REVIEW_TOOL,
+        description: 'List the quests the user explicitly opened for your review in Re:Origin, with their acceptance criteria, submitted evidence, and the deterministic verdict. Call only when the user asks you to review a submission.',
+        parameters: {},
+        output: {
+          schema: { type: 'string' },
+          render: (_args: never, value: string) => [{ type: 'text', text: value }],
+        },
+        async execute() {
+          return formatReviewable(app.reviewableSubmissions())
+        },
+      })), 'reorigin: list reviewable tool')
+      ctx.effect(() => ctx.tools.register(defineTool({
+        name: NOTE_REVIEW_TOOL,
+        description: 'Leave one advisory note on a quest the user opened for review. Notes are shown to the user; they never change the verification verdict or rewards.',
+        parameters: {
+          quest_id: { type: 'string', required: true, description: 'Quest id from the review list.' },
+          note: { type: 'string', required: true, description: 'Your comment in the user\'s language, at most 500 characters.' },
+        },
+        output: {
+          schema: { type: 'string' },
+          render: (_args: never, value: string) => [{ type: 'text', text: value }],
+        },
+        async execute(args: { quest_id: string, note: string }, exec) {
+          return describeNote(app.annotateFromAgent(exec.callId, args.quest_id, args.note))
+        },
+      })), 'reorigin: review note tool')
     },
   }
 }

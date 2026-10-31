@@ -11,9 +11,11 @@ import {
   evaluateAchievements,
   expiryTarget,
   filterCommit,
+  filterPullRequest,
   inQuietHours,
   isTerminal,
   levelForXp,
+  parseGithubLink,
   proposeQuest,
   recordEvidence,
   reverseSettlement,
@@ -38,10 +40,12 @@ import {
   type SkillBasis,
   type SkillRecord,
   type WorldEvent,
+  type WorldSource,
 } from '@reorigin/domain'
 import { AGENT_MAX_PENDING_PROPOSALS, AGENT_MAX_XP, ALLOWED_ACTORS, commandSchema, type Command } from './commands.ts'
 import { ApplicationError, toFailure, type Result } from './errors.ts'
-import type { Clock, EventType, IdSource, Memory, Notice, Store, StoredEvent, StoredVerification, Transaction } from './ports.ts'
+import { MAX_REVIEW_NOTE, notesByQuest, reviewableSubmissions, type ReviewableSubmission } from './review.ts'
+import type { Clock, EventType, IdSource, Memory, Notice, ReviewNote, Store, StoredEvent, StoredVerification, Transaction } from './ports.ts'
 
 /** Bump with any change to how XP is computed for a quest. */
 export const REWARD_RULE_VERSION = 'xp-v1'
@@ -53,6 +57,10 @@ export interface QuestView extends Quest {
   readonly settled: boolean
   /** Present when the Host took this completion back. */
   readonly retraction: Correction | null
+  /** The Host lets an agent read this quest's evidence and comment on it. */
+  readonly agentReview: boolean
+  /** Agent comments on the submission; advisory, never part of the verdict. */
+  readonly reviewNotes: readonly ReviewNote[]
 }
 
 /** An unlock and whether today's facts still support it (a retraction can withdraw the basis). */
@@ -121,6 +129,7 @@ export type CommandOutcome =
   | { readonly type: 'GrantConsent' | 'RevokeConsent', readonly consent: Consent, readonly deletedEvents?: number }
   | { readonly type: 'UpdatePreferences', readonly preferences: Preferences }
   | { readonly type: 'AddMemory', readonly memory: Memory }
+  | { readonly type: 'AllowAgentReview', readonly questId: string, readonly allow: boolean }
   | { readonly type: 'ForgetMemory' | 'MarkNoticesRead', readonly done: true }
 
 /** Everything the System holds about the Host, as one JSON document they can keep. */
@@ -193,11 +202,15 @@ export class ReOriginApp {
       const questXp = tx.questXp(host.id)
       const corrections = new Map(tx.listCorrections(host.id).map(correction => [correction.questId, correction]))
       const allQuests = tx.listQuests(host.id)
+      const reviewable = tx.reviewableQuestIds(host.id)
+      const notes = notesByQuest(tx.listReviewNotes(host.id))
       const quests = allQuests.map(quest => ({
         ...quest,
         lastVerification: tx.latestVerification(quest.id) ?? null,
         settled: questXp.has(quest.id),
         retraction: corrections.get(quest.id) ?? null,
+        agentReview: reviewable.has(quest.id),
+        reviewNotes: notes.get(quest.id) ?? [],
       }))
       const progress = levelForXp(tx.totalXp(host.id))
       const notices = tx.listNotices(host.id, 20)
@@ -227,6 +240,60 @@ export class ReOriginApp {
   /** The Host's own records, for them to take away (docs/01 principle 6). */
   exportData(): DataExport {
     return this.store.transaction(tx => ({ format: 'reorigin-export', formatVersion: 1, exportedAt: this.clock.now(), tables: tx.exportAll() }))
+  }
+
+  /**
+   * Restore an export into an empty installation (the inverse of exportData).
+   * Refused when any Host record exists, so a restore can never merge with or
+   * overwrite live data. Restored events get no outbox rows: their notices and
+   * memories were already produced before the export.
+   */
+  importData(document: unknown): Result<{ rows: number }> {
+    try {
+      if (!isExport(document)) throw new ApplicationError('import/invalid', 'not a Re:Origin export (format reorigin-export, version 1)')
+      return this.store.transaction((tx) => {
+        if (!tx.isEmpty()) throw new ApplicationError('import/not-empty', 'restore only into an installation with no Host data; erase it first')
+        const rows = tx.importAll(document.tables)
+        if (tx.getHost() === undefined) throw new ApplicationError('import/invalid', 'the export contains no Host')
+        return { ok: true, value: { rows } }
+      })
+    } catch (error) {
+      return toFailure(error)
+    }
+  }
+
+  /** Quests the Host opened for agent review, with their evidence; empty unless the Host opted in per quest. */
+  reviewableSubmissions(): ReviewableSubmission[] {
+    return this.store.transaction(tx => {
+      const host = tx.getHost()
+      return host === undefined ? [] : reviewableSubmissions(tx, host.id)
+    })
+  }
+
+  /**
+   * The review tool's only door: an advisory note on a quest the Host opened.
+   * The note never touches the verdict or the ledger; a retried call writes once.
+   */
+  annotateFromAgent(callId: string, questId: string, note: string): Result<{ noteId: string }> {
+    try {
+      return this.store.transaction((tx) => {
+        const host = tx.getHost()
+        if (host === undefined) throw new ApplicationError('host/not-bound', 'no host is bound yet')
+        if (!tx.reviewableQuestIds(host.id).has(questId)) {
+          throw new ApplicationError('review/not-allowed', 'the Host has not opened this quest for agent review')
+        }
+        const text = note.trim()
+        if (text.length === 0 || text.length > MAX_REVIEW_NOTE) throw new ApplicationError('command/invalid', `a note must be 1–${MAX_REVIEW_NOTE} characters`)
+        const noteId = `rvn_${digest(callId).slice(0, 24)}`
+        if (!tx.listReviewNotes(host.id).some(existing => existing.id === noteId)) {
+          tx.insertReviewNote({ id: noteId, hostId: host.id, questId, note: text, createdAt: this.clock.now() })
+          this.emit(tx, 'quest.review_annotated.v1', questId, { noteId }, `agent:${digest(callId).slice(0, 40)}`)
+        }
+        return { ok: true, value: { noteId } }
+      })
+    } catch (error) {
+      return toFailure(error)
+    }
   }
 
   /**
@@ -281,20 +348,29 @@ export class ReOriginApp {
   }
 
   /**
-   * Store commits a collector read under an active consent. Raw input passes
-   * the privacy filter first; already-seen commits are ignored.
+   * Store commits a collector read under an active `git_repo` consent. Raw
+   * input passes the privacy filter first; already-seen commits are ignored.
    */
   ingestCommits(consentId: string, commits: readonly { sha: string, committedAt: string, subject: string, filesChanged: number }[]): Result<{ added: number }> {
+    return this.ingest(consentId, 'git_repo', commits.map(commit => () => filterCommit(commit)))
+  }
+
+  /** Store merged pull requests a collector read under an active `github_repo` consent. */
+  ingestPullRequests(consentId: string, pulls: readonly { number: number, title: string, mergedAt: string }[]): Result<{ added: number }> {
+    return this.ingest(consentId, 'github_repo', pulls.map(pull => () => filterPullRequest(pull)))
+  }
+
+  private ingest(consentId: string, source: WorldSource, items: readonly (() => Pick<WorldEvent, 'externalId' | 'observedAt' | 'summary' | 'filesChanged'>)[]): Result<{ added: number }> {
     try {
       return this.store.transaction(tx => {
         const consent = tx.getConsent(consentId)
         if (consent === undefined || consent.status !== 'active') {
           throw new ApplicationError('consent/inactive', `consent ${consentId} is not active`)
         }
+        if (consent.source !== source) throw new ApplicationError('command/invalid', `consent ${consentId} covers ${consent.source}, not ${source}`)
         let added = 0
-        for (const commit of commits) {
-          const filtered = filterCommit(commit)
-          const event: WorldEvent = { id: this.ids.next('wev'), hostId: consent.hostId, consentId, source: consent.source, ...filtered }
+        for (const filter of items) {
+          const event: WorldEvent = { id: this.ids.next('wev'), hostId: consent.hostId, consentId, source, ...filter() }
           if (tx.insertWorldEvent(event)) added += 1
         }
         if (added > 0) this.emit(tx, 'world.event_observed.v1', consentId, { added }, 'system:collector')
@@ -328,14 +404,16 @@ export class ReOriginApp {
       let growth = { assessed: 0, unlocked: 0 }
       if (host !== undefined) {
         const preferences = tx.getPreferences(host.id)
-        if (!inQuietHours(this.clock.localHour(now), preferences)) {
+        const zone = preferences.timeZone ?? undefined
+        if (!inQuietHours(this.clock.localHour(now, zone), preferences)) {
           const { proposals, nudges } = detectOpportunities({
             now,
             events: tx.listWorldEvents(host.id, new Date(Date.parse(now) - 7 * DAY).toISOString()),
             hasGoals: host.goals.length > 0 && tx.listConsents(host.id).some(consent => consent.status === 'active'),
-            localDay: iso => this.clock.localDay(iso),
+            localDay: iso => this.clock.localDay(iso, zone),
           })
-          const dayStart = this.clock.localDayStart(now)
+          const dayStart = this.clock.localDayStart(now, zone)
+          const hasLocalRepo = tx.listConsents(host.id).some(consent => consent.status === 'active' && consent.source === 'git_repo')
           let budget = preferences.systemProposalsPerDay - tx.countSystemProposalsSince(host.id, dayStart)
           for (const candidate of proposals) {
             if (budget <= 0) break
@@ -348,7 +426,10 @@ export class ReOriginApp {
               title: candidate.title,
               objective: candidate.objective,
               rationale: candidate.rationale,
-              criteria: [{ kind: 'git_commit', minCount: candidate.minCommits, description: `${candidate.minCommits} 次已授权仓库中的提交` }],
+              // Ask for evidence a consented source can corroborate: commits from a local clone, else merged pull requests.
+              criteria: [hasLocalRepo
+                ? { kind: 'git_commit', minCount: candidate.minCommits, description: `${candidate.minCommits} 次已授权仓库中的提交` }
+                : { kind: 'link', minCount: candidate.minCommits, description: `${candidate.minCommits} 个已授权 GitHub 仓库中合并的 PR 链接` }],
               reward: { ruleVersion: REWARD_RULE_VERSION, xp: candidate.xp },
               at: now,
               expiresAt: new Date(Date.parse(now) + candidate.expiresInDays * DAY).toISOString(),
@@ -414,7 +495,8 @@ export class ReOriginApp {
    * catalog now allows. Both are keyed, so running it again is a no-op.
    */
   private advanceGrowth(tx: Transaction, host: Host, now: string): { assessed: number, unlocked: number } {
-    const localDay = (iso: string): string => this.clock.localDay(iso)
+    const zone = tx.getPreferences(host.id).timeZone ?? undefined
+    const localDay = (iso: string): string => this.clock.localDay(iso, zone)
     const records = this.completedRecords(tx, host)
     const latest = new Map(tx.latestAssessments(host.id).map(item => [item.skill, item]))
     const bySkill = groupBySkill(records)
@@ -473,7 +555,7 @@ export class ReOriginApp {
       })),
       level: levelForXp(tx.totalXp(host.id)).level,
       skills: skills.map(item => ({ skill: item.skill, tier: item.tier })),
-      localDay: iso => this.clock.localDay(iso),
+      localDay: iso => this.clock.localDay(iso, tx.getPreferences(host.id).timeZone ?? undefined),
     }
   }
 
@@ -547,6 +629,9 @@ export class ReOriginApp {
         notice('achievement', payload.kind === 'title' ? `【称号获得】${String(payload.name)}` : `【成就解锁】${String(payload.name)}`,
           `${String(payload.description)}。`, `achievement:${String(payload.key)}`)
         return
+      case 'quest.review_annotated.v1':
+        notice('review', '【Agent 附注】', `「${tx.getQuest(event.aggregateId)?.title ?? '任务'}」收到一条点评，仅供参考，不影响核验结论。`, `review:${String(payload.noteId)}`)
+        return
       case 'quest.retracted.v1': {
         const reversed = Number(payload.xpReversed)
         notice('correction', '【纠错】已撤回完成', `「${String(payload.title)}」不再计入成长${reversed > 0 ? `，扣回 ${reversed} XP` : ''}。理由：${String(payload.reason)}`, `retracted:${event.aggregateId}`)
@@ -611,11 +696,12 @@ export class ReOriginApp {
         return { type: 'ProposeQuest', quest }
       }
       case 'GrantConsent': {
-        const existing = tx.listConsents(host.id).find(consent => consent.status === 'active' && consent.scopeRef === command.payload.scopeRef)
-        if (existing !== undefined) throw new ApplicationError('consent/duplicate', 'this repository is already authorized')
+        const { source, scopeRef } = command.payload
+        const existing = tx.listConsents(host.id).find(consent => consent.status === 'active' && consent.source === source && consent.scopeRef === scopeRef)
+        if (existing !== undefined) throw new ApplicationError('consent/duplicate', 'this source is already authorized')
         const consent: Consent = {
           id: this.ids.next('cns'), hostId: host.id, source: command.payload.source, scopeRef: command.payload.scopeRef,
-          authorEmail: command.payload.authorEmail.toLowerCase(), status: 'active', grantedAt: at, revokedAt: null,
+          author: command.payload.author.toLowerCase(), status: 'active', grantedAt: at, revokedAt: null,
         }
         tx.insertConsent(consent)
         emit('consent.granted.v1', consent.id, { source: consent.source })
@@ -636,10 +722,18 @@ export class ReOriginApp {
           quietHours: command.payload.quietHours,
           systemProposalsPerDay: command.payload.systemProposalsPerDay,
           persona: command.payload.persona ?? tx.getPreferences(host.id).persona,
+          timeZone: command.payload.timeZone === undefined ? tx.getPreferences(host.id).timeZone : command.payload.timeZone,
         }
         tx.setPreferences(host.id, preferences)
         emit('preferences.updated.v1', host.id, preferences)
         return { type: 'UpdatePreferences', preferences }
+      }
+      case 'AllowAgentReview': {
+        const target = tx.getQuest(command.payload.questId)
+        if (target === undefined || target.hostId !== host.id) throw new ApplicationError('quest/not-found', `no quest ${command.payload.questId}`)
+        tx.setAgentReview(target.id, command.payload.allow, at)
+        emit('quest.review_allowed.v1', target.id, { allow: command.payload.allow })
+        return { type: 'AllowAgentReview', questId: target.id, allow: command.payload.allow }
       }
       case 'AddMemory': {
         const memory: Memory = { id: this.ids.next('mem'), hostId: host.id, kind: 'note', text: command.payload.text.trim(), sourceRef: null, createdAt: at, forgottenAt: null }
@@ -708,8 +802,9 @@ export class ReOriginApp {
           // and time come from the repository, not from what the Host typed.
           const commit = item.kind === 'git_commit' && /^[0-9a-f]{7,64}$/i.test(item.ref.trim())
             ? tx.findCommit(host.id, item.ref.trim().toLowerCase())
-            : undefined
-          const ref = commit?.externalId ?? item.ref
+            : item.kind === 'link' ? corroborateLink(tx, host.id, item.ref) : undefined
+          // A corroborated link keeps the URL the Host gave; a commit is normalized to its full SHA.
+          const ref = item.kind === 'link' || commit === undefined ? item.ref : commit.externalId
           return recordEvidence({
             id: this.ids.next('ev'),
             hostId: host.id,
@@ -792,10 +887,29 @@ function growthTracks(quests: readonly Quest[], xpByQuest: ReadonlyMap<string, n
   return [...tracks.entries()].map(([skill, track]) => ({ skill, ...track })).sort((a, b) => b.completions - a.completions)
 }
 
+/**
+ * Link evidence pointing at GitHub can be checked: a pull request against a
+ * consented GitHub repository, or a commit seen in a consented local clone.
+ */
+function corroborateLink(tx: Transaction, hostId: string, url: string): WorldEvent | undefined {
+  const link = parseGithubLink(url)
+  if (link === null) return undefined
+  return link.kind === 'pull'
+    ? tx.findWorldEvent(hostId, 'github_repo', link.slug, `pr:${link.number}`)
+    : tx.findCommit(hostId, link.sha)
+}
+
 function digest(text: string): string {
   return createHash('sha256').update(text).digest('hex')
 }
 
 function contentHash(kind: string, ref: string, summary: string): string {
   return `sha256:${digest(`${kind}\n${ref.trim()}\n${summary.trim()}`)}`
+}
+
+function isExport(document: unknown): document is DataExport {
+  if (typeof document !== 'object' || document === null) return false
+  const candidate = document as Record<string, unknown>
+  return candidate.format === 'reorigin-export' && candidate.formatVersion === 1
+    && typeof candidate.tables === 'object' && candidate.tables !== null && !Array.isArray(candidate.tables)
 }

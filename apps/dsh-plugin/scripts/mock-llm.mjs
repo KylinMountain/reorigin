@@ -5,6 +5,8 @@ import { createServer } from 'node:http'
 
 const LOG = process.argv[2]
 const PORT = Number(process.argv[3] ?? 4599)
+// 'propose' (default): one reorigin_propose_quest call. 'review': list reviewable quests, then annotate the first.
+const SCENARIO = process.argv[4] ?? 'propose'
 writeFileSync(LOG, '')
 
 const PROPOSAL = {
@@ -39,8 +41,19 @@ createServer((req, res) => {
     try { parsed = JSON.parse(body) } catch {}
     appendFileSync(LOG, `${JSON.stringify({ url: req.url, body: parsed })}\n`)
     const messages = parsed.messages ?? []
-    const answered = messages.some(message => message.role === 'tool')
-    const toolResult = messages.filter(message => message.role === 'tool').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n')
+    const toolResults = messages.filter(message => message.role === 'tool').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content))
+    const answered = toolResults.length > 0
+    const toolResult = toolResults.join('\n')
+    if (SCENARIO === 'review' && toolResults.length < 2) {
+      const call = (name, args) => [
+        chunk({ tool_calls: [{ index: 0, id: `call_mock_${name}_${toolResults.length}`, type: 'function', function: { name, arguments: '' } }] }),
+        chunk({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] }),
+        chunk({}, 'tool_calls'),
+      ]
+      if (toolResults.length === 0) return sse(res, [chunk({ role: 'assistant', content: '' }), ...call('reorigin_list_reviewable', {})])
+      const questId = toolResult.match(/任务 (quest_[A-Za-z0-9_]+)/)?.[1] ?? 'missing'
+      return sse(res, [chunk({ role: 'assistant', content: '' }), ...call('reorigin_add_review_note', { quest_id: questId, note: '证据是一个普通链接，建议补充已授权仓库中合并的 PR 链接以便佐证。' })])
+    }
     if (!answered) {
       return sse(res, [
         chunk({ role: 'assistant', content: '【系统检测到成长机会】' }),

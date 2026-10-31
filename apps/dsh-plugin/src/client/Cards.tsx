@@ -123,8 +123,10 @@ export function Memories({ dashboard, run, busy, client, hostId }: { dashboard: 
 
 export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: Dashboard } & Ctx) {
   const [open, setOpen] = useState(false)
+  const [source, setSource] = useState<'git_repo' | 'github_repo'>('git_repo')
   const [repo, setRepo] = useState('')
   const [email, setEmail] = useState('')
+  const [timeZone, setTimeZone] = useState(dashboard.preferences?.timeZone ?? '')
   const [deleteData, setDeleteData] = useState(true)
   const preferences = dashboard.preferences
   const [quiet, setQuiet] = useState(preferences?.quietHours !== null)
@@ -146,9 +148,11 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
   const grant = (event: FormEvent) => {
     event.preventDefault()
     void run(async () => {
-      await client.execute('GrantConsent', { source: 'git_repo', scopeRef: repo.trim(), authorEmail: email.trim() }, hostId)
+      await client.execute('GrantConsent', { source, scopeRef: repo.trim(), author: email.trim() }, hostId)
       setRepo('')
-    }, '已授权。系统只读取该仓库中这个邮箱作者的提交：SHA、时间、标题与改动文件数。')
+    }, source === 'github_repo'
+      ? '已授权。系统只读取该仓库中这个账号合并的 PR：编号、标题与合并时间。'
+      : '已授权。系统只读取该仓库中这个邮箱作者的提交：SHA、时间、标题与改动文件数。')
   }
   const hours = Array.from({ length: 24 }, (_, hour) => hour)
   return (
@@ -159,13 +163,14 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
       </div>
 
       <p className="ro-section-title">数据源授权</p>
-      <p className="ro-muted" style={{ margin: 0 }}>系统只观察你明确授权的来源。来自授权仓库的提交可作为「已佐证」证据，时间以仓库记录为准。</p>
+      <p className="ro-muted" style={{ margin: 0 }}>系统只观察你明确授权的来源。来自授权来源的提交与 PR 可作为「已佐证」证据，时间以来源记录为准。GitHub 来源优先使用本机已登录的 gh，没有时只能读公开仓库。</p>
       {dashboard.consents.length === 0 && <p className="ro-muted" style={{ margin: 0 }}>尚未授权任何数据源。</p>}
       {dashboard.consents.map(consent => (
         <div key={consent.id} className="ro-row ro-spread ro-consent">
           <span>
             <span className="ro-badge" data-tone={consent.status === 'active' ? 'ok' : 'muted'}>{consent.status === 'active' ? '生效中' : '已撤销'}</span>{' '}
-            <span className="ro-mono">{consent.scopeRef}</span> <span className="ro-muted">· {consent.authorEmail}</span>
+            <span className="ro-badge" data-tone="muted">{consent.source === 'github_repo' ? 'GitHub' : '本地仓库'}</span>{' '}
+            <span className="ro-mono">{consent.scopeRef}</span> <span className="ro-muted">· {consent.author}</span>
           </span>
           {consent.status === 'active' && (
             <button className="ro-btn" disabled={busy} onClick={() => void run(
@@ -179,9 +184,17 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
         <label className="ro-inline"><input type="checkbox" checked={deleteData} onChange={e => setDeleteData(e.target.checked)} />撤销时同时删除已采集的数据</label>
       )}
       <form className="ro-grid2" onSubmit={grant}>
-        <label>本地仓库绝对路径<input className="ro-input ro-mono" value={repo} onChange={e => setRepo(e.target.value)} placeholder="/Users/me/projects/app" required /></label>
-        <label>你的提交邮箱<input className="ro-input" type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
-        <div><button className="ro-btn" data-primary type="submit" disabled={busy || repo.trim() === '' || email.trim() === ''}>授权该仓库</button></div>
+        <label>来源类型<select className="ro-input" value={source} onChange={e => setSource(e.target.value as 'git_repo' | 'github_repo')}>
+          <option value="git_repo">本地 Git 仓库</option>
+          <option value="github_repo">GitHub 仓库（合并的 PR）</option>
+        </select></label>
+        {source === 'git_repo'
+          ? <label>本地仓库绝对路径<input className="ro-input ro-mono" value={repo} onChange={e => setRepo(e.target.value)} placeholder="/Users/me/projects/app" required /></label>
+          : <label>GitHub 仓库<input className="ro-input ro-mono" value={repo} onChange={e => setRepo(e.target.value)} placeholder="owner/name" required /></label>}
+        {source === 'git_repo'
+          ? <label>你的提交邮箱<input className="ro-input" type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
+          : <label>你的 GitHub 用户名<input className="ro-input" value={email} onChange={e => setEmail(e.target.value)} required /></label>}
+        <div><button className="ro-btn" data-primary type="submit" disabled={busy || repo.trim() === '' || email.trim() === ''}>授权该来源</button></div>
       </form>
 
       <p className="ro-section-title">主动程度与人格</p>
@@ -190,6 +203,10 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
         <label>免打扰开始<select className="ro-input" value={start} disabled={!quiet} onChange={e => setStart(Number(e.target.value))}>{hours.map(hour => <option key={hour} value={hour}>{hour}:00</option>)}</select></label>
         <label>免打扰结束<select className="ro-input" value={end} disabled={!quiet} onChange={e => setEnd(Number(e.target.value))}>{hours.map(hour => <option key={hour} value={hour}>{hour}:00</option>)}</select></label>
         <label>每天最多系统任务<select className="ro-input" value={perDay} onChange={e => setPerDay(Number(e.target.value))}>{[0, 1, 2, 3].map(count => <option key={count} value={count}>{count}</option>)}</select></label>
+        <label>时区（免打扰与每日上限）<select className="ro-input" value={timeZone} onChange={e => setTimeZone(e.target.value)}>
+          <option value="">跟随本机（{Intl.DateTimeFormat().resolvedOptions().timeZone}）</option>
+          {Intl.supportedValuesOf('timeZone').map(zone => <option key={zone} value={zone}>{zone}</option>)}
+        </select></label>
         <label>系统人格（对话语气）<select className="ro-input" value={persona} onChange={e => setPersona(e.target.value as PersonaStyle)}>
           {Object.entries(PERSONA_STYLE_INFO).map(([style, info]) => <option key={style} value={style}>{info.name}</option>)}
         </select></label>
@@ -197,7 +214,7 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
       <label className="ro-inline"><input type="checkbox" checked={voice} onChange={e => { setVoiceEnabled(e.target.checked); setVoice(e.target.checked) }} />系统播报：觉醒与升级时朗读（仅本浏览器）</label>
       <div className="ro-row">
         <button className="ro-btn" data-primary disabled={busy} onClick={() => void run(
-          () => client.execute('UpdatePreferences', { quietHours: quiet ? { start, end } : null, systemProposalsPerDay: perDay, persona }, hostId),
+          () => client.execute('UpdatePreferences', { quietHours: quiet ? { start, end } : null, systemProposalsPerDay: perDay, persona, timeZone: timeZone === '' ? null : timeZone }, hostId),
           '设置已保存。',
         )}>保存</button>
         <button className="ro-btn" disabled={busy} onClick={() => void run(() => client.syncNow(), '已与授权数据源同步。')}>立即同步</button>

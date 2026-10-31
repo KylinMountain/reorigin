@@ -165,7 +165,7 @@ function createTransaction(db: DatabaseSync): Transaction {
     insertConsent(consent) {
       run(`INSERT INTO consents (id, host_id, source, scope_ref, author_email, status, granted_at, revoked_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      consent.id, consent.hostId, consent.source, consent.scopeRef, consent.authorEmail, consent.status, consent.grantedAt, consent.revokedAt)
+      consent.id, consent.hostId, consent.source, consent.scopeRef, consent.author, consent.status, consent.grantedAt, consent.revokedAt)
     },
     getConsent(consentId) {
       const row = one('SELECT * FROM consents WHERE id = ?', consentId)
@@ -266,6 +266,63 @@ function createTransaction(db: DatabaseSync): Transaction {
       return all('SELECT * FROM events ORDER BY occurred_at DESC, rowid DESC LIMIT ?', limit).map(toEvent)
     },
 
+    findWorldEvent(hostId, source, scopeRef, externalId) {
+      const row = one(`SELECT w.* FROM world_events w JOIN consents c ON c.id = w.consent_id
+                       WHERE w.host_id = ? AND c.status = 'active' AND c.source = ? AND c.scope_ref = ? AND w.external_id = ? LIMIT 1`,
+      hostId, source, scopeRef, externalId)
+      return row === undefined ? undefined : toWorldEvent(row)
+    },
+
+    reviewableQuestIds(hostId) {
+      return new Set(all(`SELECT g.quest_id AS id FROM review_grants g JOIN quests q ON q.id = g.quest_id
+                          WHERE q.host_id = ? AND g.allowed = 1`, hostId).map(row => String(row.id)))
+    },
+    setAgentReview(questId, allow, at) {
+      run(`INSERT INTO review_grants (quest_id, allowed, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT (quest_id) DO UPDATE SET allowed = excluded.allowed, updated_at = excluded.updated_at`, questId, allow ? 1 : 0, at)
+    },
+    insertReviewNote(note) {
+      run('INSERT INTO review_notes (id, host_id, quest_id, note, created_at) VALUES (?, ?, ?, ?, ?)', note.id, note.hostId, note.questId, note.note, note.createdAt)
+    },
+    listReviewNotes(hostId) {
+      return all('SELECT * FROM review_notes WHERE host_id = ? ORDER BY created_at, rowid', hostId).map(row => ({
+        id: text(row.id), hostId: text(row.host_id), questId: text(row.quest_id), note: text(row.note), createdAt: text(row.created_at),
+      }))
+    },
+
+    isEmpty() {
+      return PERSONAL_TABLES.every(table => Number(one(`SELECT COUNT(*) AS n FROM ${table}`)!.n) === 0)
+    },
+    importAll(tables) {
+      const unknown = Object.keys(tables).filter(table => !(PERSONAL_TABLES as readonly string[]).includes(table))
+      if (unknown.length > 0) throw new ApplicationError('import/invalid', `unknown tables: ${unknown.join(', ')}`)
+      let written = 0
+      for (const table of PERSONAL_TABLES) {
+        const rows = tables[table]
+        if (rows === undefined) continue
+        if (!Array.isArray(rows)) throw new ApplicationError('import/invalid', `${table} must be a list of rows`)
+        const columns = new Set(all(`PRAGMA table_info(${table})`).map(row => String(row.name)))
+        for (const row of rows) {
+          if (typeof row !== 'object' || row === null || Array.isArray(row)) throw new ApplicationError('import/invalid', `${table}: a row must be an object`)
+          const names: string[] = []
+          const values: SQLInputValue[] = []
+          for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
+            // exportAll strips the _json suffix and parses the JSON; undo exactly that.
+            const json = columns.has(`${key}_json`) && !columns.has(key)
+            const column = json ? `${key}_json` : key
+            if (!columns.has(column)) throw new ApplicationError('import/invalid', `${table}: unknown column ${key}`)
+            if (json) values.push(JSON.stringify(value))
+            else if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') values.push(value)
+            else throw new ApplicationError('import/invalid', `${table}.${key}: unsupported value`)
+            names.push(column)
+          }
+          run(`INSERT INTO ${table} (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`, ...values)
+          written += 1
+        }
+      }
+      return written
+    },
+
     exportAll() {
       const tables: Record<string, unknown[]> = {}
       for (const table of PERSONAL_TABLES) {
@@ -298,11 +355,11 @@ function createTransaction(db: DatabaseSync): Transaction {
 /** Every table holding the Host's records; one Host per installation, so "the Host's" means all rows. */
 const PERSONAL_TABLES = [
   'hosts', 'quests', 'evidence', 'verifications', 'reward_ledger', 'corrections', 'skill_assessments', 'achievements',
-  'consents', 'world_events', 'notices', 'memories', 'events',
+  'consents', 'world_events', 'notices', 'memories', 'events', 'review_grants', 'review_notes',
 ] as const
 /** Children before parents, so foreign keys hold at every step. Command results go too: they echo payloads. */
 const PURGE_ORDER = [
-  'outbox', 'events', 'processed_commands', 'corrections', 'reward_ledger', 'verifications', 'evidence', 'skill_assessments', 'achievements',
+  'review_notes', 'review_grants', 'outbox', 'events', 'processed_commands', 'corrections', 'reward_ledger', 'verifications', 'evidence', 'skill_assessments', 'achievements',
   'notices', 'memories', 'world_events', 'consents', 'quests', 'hosts',
 ] as const
 
@@ -392,7 +449,7 @@ function toConsent(row: Row): Consent {
     hostId: text(row.host_id),
     source: text(row.source) as Consent['source'],
     scopeRef: text(row.scope_ref),
-    authorEmail: text(row.author_email),
+    author: text(row.author_email),
     status: text(row.status) as Consent['status'],
     grantedAt: text(row.granted_at),
     revokedAt: nullableText(row.revoked_at),

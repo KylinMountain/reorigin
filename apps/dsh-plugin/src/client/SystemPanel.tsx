@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { Dashboard, QuestView } from '@reorigin/application'
-import { PERSONA_STYLE_INFO, type EvidenceKind, type PersonaStyle, type QuestType, type WorldEvent } from '@reorigin/domain'
+import { PERSONA_STYLE_INFO, type EvidenceKind, type PersonaStyle, type QuestType, type WorldEvent, type Consent } from '@reorigin/domain'
 import { RemoteFailure, type AgentStatus, type ReOriginClient } from './api.ts'
 import { Achievements, Audit, Growth, Memories, Notices, Settings } from './Cards.tsx'
 import { Awakening, LevelUp } from './Overlays.tsx'
@@ -114,7 +114,21 @@ function BindForm({ run, busy, client, onBound }: { run: Run, busy: boolean, cli
           </label>
         ))}
       </fieldset>
-      <div><button className="ro-btn" data-primary type="submit" disabled={busy || name.trim() === ''}>绑定宿主</button></div>
+      <div className="ro-row">
+        <button className="ro-btn" data-primary type="submit" disabled={busy || name.trim() === ''}>绑定宿主</button>
+        <label className="ro-btn ro-file">从导出文件恢复…
+          <input type="file" accept="application/json,.json" disabled={busy} onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (file !== undefined) {
+              void run(async () => {
+                const restored = await client.importData(JSON.parse(await file.text()))
+                if (!restored.ok) throw new RemoteFailure(restored.error.code, restored.error.message)
+              }, '已从导出文件恢复。')
+            }
+          }} />
+        </label>
+      </div>
     </form>
   )
 }
@@ -149,7 +163,7 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
 
       <p className="ro-section-title">进行中的任务（{active.length}）</p>
       {active.length === 0 && <div className="ro-muted">暂无任务。发布一条与你主线目标相关的现实任务吧。</div>}
-      {active.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} {...ctx} />)}
+      {active.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} consents={dashboard.consents} {...ctx} />)}
 
       <Growth dashboard={dashboard} />
       <Achievements dashboard={dashboard} {...ctx} />
@@ -157,7 +171,7 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
       <Audit dashboard={dashboard} />
 
       {closed.length > 0 && <p className="ro-section-title">历史（{closed.length}）</p>}
-      {closed.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} {...ctx} />)}
+      {closed.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} consents={dashboard.consents} {...ctx} />)}
     </>
   )
 }
@@ -211,7 +225,7 @@ function NewQuestForm({ run, busy, client, hostId }: Ctx) {
   )
 }
 
-function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[] } & Ctx) {
+function QuestCard({ quest, commits, consents, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[], consents: readonly Consent[] } & Ctx) {
   const status = STATUS[quest.status]
   const act = (type: 'AcceptQuest' | 'CancelQuest' | 'PauseQuest' | 'ResumeQuest' | 'VerifyQuest' | 'SettleQuest', message: string) =>
     () => void run(() => client.execute(type, { questId: quest.id }, hostId), message)
@@ -276,8 +290,21 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
           {quest.retraction.reason}{quest.retraction.xpReversed > 0 ? ` · 已扣回 ${quest.retraction.xpReversed} XP` : ''} · {relativeTime(quest.retraction.correctedAt)}
         </p>
       )}
+      {quest.reviewNotes.length > 0 && (
+        <div className="ro-review" data-testid="reorigin-review-notes">
+          <span className="ro-badge" data-tone="accent">Agent 附注 · 不参与裁决</span>
+          <ul className="ro-list">{quest.reviewNotes.map(note => <li key={note.id}>{note.note} <span className="ro-muted">· {relativeTime(note.createdAt)}</span></li>)}</ul>
+        </div>
+      )}
+      <label className="ro-inline ro-muted" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={quest.agentReview} disabled={busy} onChange={e => void run(
+          () => client.execute('AllowAgentReview', { questId: quest.id, allow: e.target.checked }, hostId),
+          e.target.checked ? '已允许 Agent 查看此任务的证据并留下附注。' : '已收回 Agent 对此任务的查看权限。',
+        )} />
+        允许 Agent 查看此任务的证据并留下点评（附注只供参考，不影响核验与奖励）
+      </label>
       {quest.status === 'COMPLETED' && quest.retraction === null && <RetractForm quest={quest} run={run} busy={busy} client={client} hostId={hostId} />}
-      {canSubmit && <EvidenceForm quest={quest} commits={commits} run={run} busy={busy} client={client} hostId={hostId} />}
+      {canSubmit && <EvidenceForm quest={quest} commits={commits} consents={consents} run={run} busy={busy} client={client} hostId={hostId} />}
       {actions !== null && <div className="ro-row" style={{ marginTop: 12 }}>{actions}</div>}
     </div>
   )
@@ -305,14 +332,20 @@ function RetractForm({ quest, run, busy, client, hostId }: { quest: QuestView } 
   )
 }
 
-function EvidenceForm({ quest, commits, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[] } & Ctx) {
+function EvidenceForm({ quest, commits, consents, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[], consents: readonly Consent[] } & Ctx) {
   const [kind, setKind] = useState<EvidenceKind>(quest.criteria[0]?.kind ?? 'manual')
   const [ref, setRef] = useState('')
   const [summary, setSummary] = useState('')
   const [attested, setAttested] = useState(false)
-  // Commits made after acceptance are the only ones the verifier will count.
-  const eligible = commits.filter(commit => quest.acceptedAt === null || commit.observedAt >= quest.acceptedAt)
-  const corroborated = kind === 'git_commit' && eligible.some(commit => ref.trim().length >= 7 && commit.externalId.startsWith(ref.trim().toLowerCase()))
+  // Activity after acceptance is the only kind the verifier will count.
+  const recent = commits.filter(event => quest.acceptedAt === null || event.observedAt >= quest.acceptedAt)
+  const eligible = recent.filter(event => event.source === 'git_repo')
+  const slugOf = new Map(consents.map(consent => [consent.id, consent.scopeRef]))
+  const pulls = recent.filter(event => event.source === 'github_repo' && slugOf.has(event.consentId))
+    .map(event => ({ ...event, url: `https://github.com/${slugOf.get(event.consentId)!}/pull/${event.externalId.slice(3)}` }))
+  const corroborated = kind === 'git_commit'
+    ? eligible.some(commit => ref.trim().length >= 7 && commit.externalId.startsWith(ref.trim().toLowerCase()))
+    : kind === 'link' && pulls.some(pull => ref.trim().toLowerCase().startsWith(pull.url))
   const submit = (event: FormEvent) => {
     event.preventDefault()
     void run(async () => {
@@ -339,12 +372,18 @@ function EvidenceForm({ quest, commits, run, busy, client, hostId }: { quest: Qu
             {eligible.map(commit => <option key={commit.id} value={commit.externalId}>{commit.externalId.slice(0, 8)} · {commit.summary}</option>)}
           </select></label>
         )}
+        {kind === 'link' && pulls.length > 0 && (
+          <label>从授权的 GitHub 仓库选择<select className="ro-input" value="" onChange={e => setRef(e.target.value)}>
+            <option value="">— 选择接受任务之后合并的 PR —</option>
+            {pulls.map(pull => <option key={pull.id} value={pull.url}>#{pull.externalId.slice(3)} · {pull.summary}</option>)}
+          </select></label>
+        )}
         <label>{kind === 'git_commit' ? '提交 SHA' : kind === 'link' ? 'URL' : '你做了什么'}
           <input className="ro-input" value={ref} onChange={e => setRef(e.target.value)} maxLength={500} required /></label>
       </div>
       <label>补充说明<input className="ro-input" value={summary} onChange={e => setSummary(e.target.value)} maxLength={1000} /></label>
       {corroborated
-        ? <p className="ro-muted" style={{ margin: 0 }}>✓ 该提交来自已授权仓库，将作为「已佐证」证据，时间以仓库记录为准。</p>
+        ? <p className="ro-muted" style={{ margin: 0 }}>✓ 来自已授权数据源，将作为「已佐证」证据，时间以来源记录为准。</p>
         : <label className="ro-inline"><input type="checkbox" checked={attested} onChange={e => setAttested(e.target.checked)} />我确认以上内容属实（没有授权数据源佐证时必须确认）</label>}
       <div><button className="ro-btn" data-primary type="submit" disabled={busy || ref.trim() === ''}>提交证据并核验</button></div>
     </form>

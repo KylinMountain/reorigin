@@ -1,4 +1,4 @@
-import { EVIDENCE_KINDS, MAX_DISPLAY_NAME, MAX_GOALS, MAX_XP_PER_QUEST, PERSONA_STYLES, QUEST_TYPES } from '@reorigin/domain'
+import { EVIDENCE_KINDS, MAX_DISPLAY_NAME, MAX_GOALS, MAX_XP_PER_QUEST, PERSONA_STYLES, QUEST_TYPES, githubSlug, isTimeZone } from '@reorigin/domain'
 import { z } from 'zod'
 
 /**
@@ -75,11 +75,18 @@ export const commandSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('GrantConsent'),
     hostId: id,
-    payload: z.object({
-      source: z.literal('git_repo'),
-      scopeRef: z.string().min(2).max(1000).refine(path => path.startsWith('/'), 'must be an absolute path'),
-      authorEmail: z.email(),
-    }),
+    payload: z.discriminatedUnion('source', [
+      z.object({
+        source: z.literal('git_repo'),
+        scopeRef: z.string().min(2).max(1000).refine(path => path.startsWith('/'), 'must be an absolute path'),
+        author: z.email(),
+      }),
+      z.object({
+        source: z.literal('github_repo'),
+        scopeRef: z.string().max(200).transform((value, ctx) => githubSlug(value) ?? (ctx.addIssue({ code: 'custom', message: 'must be owner/name' }), z.NEVER)),
+        author: z.string().regex(/^[A-Za-z0-9-]{1,39}$/, 'must be a GitHub login'),
+      }),
+    ]),
   }),
   z.object({
     ...envelope,
@@ -96,8 +103,11 @@ export const commandSchema = z.discriminatedUnion('type', [
       systemProposalsPerDay: z.int().min(0).max(3),
       /** Omitted keeps the current persona. */
       persona: z.enum(PERSONA_STYLES).optional(),
+      /** IANA zone; null follows the Host machine; omitted keeps the current setting. */
+      timeZone: z.string().max(64).refine(isTimeZone, 'unknown time zone').nullable().optional(),
     }),
   }),
+  z.object({ ...envelope, type: z.literal('AllowAgentReview'), hostId: id, payload: z.object({ questId: id, allow: z.boolean() }) }),
   z.object({ ...envelope, type: z.literal('AddMemory'), hostId: id, payload: z.object({ text: z.string().min(1).max(300) }) }),
   z.object({ ...envelope, type: z.literal('ForgetMemory'), hostId: id, payload: z.object({ memoryId: id }) }),
   z.object({ ...envelope, type: z.literal('MarkNoticesRead'), hostId: id, payload: z.object({}) }),
@@ -132,6 +142,8 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   RetractCompletion: ['host'],
   // What the System may observe and remember is the Host's call alone.
   GrantConsent: ['host'],
+  // Letting an agent read a quest's evidence is a per-quest grant only the Host gives.
+  AllowAgentReview: ['host'],
   RevokeConsent: ['host'],
   UpdatePreferences: ['host'],
   AddMemory: ['host'],

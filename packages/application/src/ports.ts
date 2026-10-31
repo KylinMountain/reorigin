@@ -4,12 +4,21 @@ import type { Achievement, Consent, Correction, Evidence, Host, LedgerEntry, Pre
 export interface Notice {
   readonly id: string
   readonly hostId: string
-  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement' | 'correction'
+  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement' | 'correction' | 'review'
   readonly title: string
   readonly body: string
   readonly createdAt: string
   readonly readAt: string | null
   readonly sourceKey: string
+}
+
+/** A model's comment on a submission. Advisory only: it never feeds a verdict (docs/05). */
+export interface ReviewNote {
+  readonly id: string
+  readonly hostId: string
+  readonly questId: string
+  readonly note: string
+  readonly createdAt: string
 }
 
 /** Long-term memory the agent may read: milestones derived from completed quests, and Host-written notes. */
@@ -51,6 +60,8 @@ export type EventType =
   | 'memory.added.v1'
   | 'memory.forgotten.v1'
   | 'system.nudged.v1'
+  | 'quest.review_allowed.v1'
+  | 'quest.review_annotated.v1'
   | 'skill.assessed.v1'
   | 'achievement.unlocked.v1'
   | 'host.title_equipped.v1'
@@ -120,6 +131,19 @@ export interface Transaction {
   listWorldEvents(hostId: string, since: string): WorldEvent[]
   /** A collected commit of an active consent whose SHA starts with `shaPrefix` (≥ 7 hex chars). */
   findCommit(hostId: string, shaPrefix: string): WorldEvent | undefined
+  /** An event of an active consent for `source` + `scopeRef` with exactly this source id. */
+  findWorldEvent(hostId: string, source: WorldEvent['source'], scopeRef: string, externalId: string): WorldEvent | undefined
+
+  /** Quests whose evidence the Host currently lets an agent read. */
+  reviewableQuestIds(hostId: string): Set<string>
+  setAgentReview(questId: string, allow: boolean, at: string): void
+  insertReviewNote(note: ReviewNote): void
+  listReviewNotes(hostId: string): ReviewNote[]
+
+  /** Whether the store holds no Host records at all (restore precondition). */
+  isEmpty(): boolean
+  /** Write an export's rows back; columns are checked against the schema. Returns rows written. */
+  importAll(tables: Record<string, unknown[]>): number
   deleteWorldEvents(consentId: string): number
 
   /** Insert unless the source key exists; returns whether it was new. */
@@ -160,12 +184,12 @@ export interface Store {
 /** Time source, including the Host's local calendar (quiet hours and daily caps are local). */
 export interface Clock {
   now(): string
-  /** Local hour 0–23 of an ISO instant. */
-  localHour(iso: string): number
+  /** Local hour 0–23 of an ISO instant, in `zone` (IANA) or the machine's zone. */
+  localHour(iso: string, zone?: string): number
   /** Local calendar day (YYYY-MM-DD) of an ISO instant. */
-  localDay(iso: string): string
+  localDay(iso: string, zone?: string): string
   /** ISO instant of the start of the local day containing `iso`. */
-  localDayStart(iso: string): string
+  localDayStart(iso: string, zone?: string): string
 }
 
 export interface IdSource {

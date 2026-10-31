@@ -28,8 +28,8 @@ export async function isGitRepository(path: string): Promise<boolean> {
  * subject, and a changed-file count leave this function; the author filter is
  * re-applied on the exact address because `git log --author` is a regex.
  */
-export async function readCommits(input: { repo: string, authorEmail: string, since: string, limit?: number }): Promise<RawCommit[]> {
-  const email = input.authorEmail.toLowerCase()
+export async function readCommits(input: { repo: string, author: string, since: string, limit?: number }): Promise<RawCommit[]> {
+  const email = input.author.toLowerCase()
   const { stdout } = await run('git', [
     '-C', input.repo,
     'log',

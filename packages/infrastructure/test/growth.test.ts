@@ -105,7 +105,7 @@ describe('Growth Engine on SQLite', () => {
   })
 
   it('raises confidence only for evidence an authorized source corroborates', () => {
-    const consent = run('GrantConsent', { source: 'git_repo', scopeRef: '/repo/app', authorEmail: 'me@example.com' })
+    const consent = run('GrantConsent', { source: 'git_repo', scopeRef: '/repo/app', author: 'me@example.com' })
     if (consent.type !== 'GrantConsent') throw new Error('unexpected')
     for (const n of [1, 2, 3]) {
       complete(n, { skill: '后端', consentId: consent.consent.id })

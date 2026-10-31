@@ -7,17 +7,17 @@ import type { PersonaStyle } from './narrative.ts'
  * the commit SHA, a truncated subject line, its timestamp, and a file count —
  * never diffs or file names.
  */
-export const WORLD_SOURCES = ['git_repo'] as const
+export const WORLD_SOURCES = ['git_repo', 'github_repo'] as const
 export type WorldSource = (typeof WORLD_SOURCES)[number]
 
 export interface Consent {
   readonly id: string
   readonly hostId: string
   readonly source: WorldSource
-  /** What the grant covers: for `git_repo`, the absolute repository path. */
+  /** What the grant covers: for `git_repo` the absolute repository path, for `github_repo` "owner/name". */
   readonly scopeRef: string
-  /** Only commits by this author are collected. */
-  readonly authorEmail: string
+  /** Only this author's activity is collected: a commit email for `git_repo`, a GitHub login for `github_repo`. */
+  readonly author: string
   readonly status: 'active' | 'revoked'
   readonly grantedAt: string
   readonly revokedAt: string | null
@@ -43,13 +43,53 @@ export function filterCommit(raw: { sha: string, committedAt: string, subject: s
   if (!/^[0-9a-f]{7,64}$/.test(raw.sha)) throw new DomainError('world/invalid', `not a commit sha: ${raw.sha}`)
   const observed = Date.parse(raw.committedAt)
   if (Number.isNaN(observed)) throw new DomainError('world/invalid', `bad commit time for ${raw.sha}`)
-  const subject = raw.subject.replace(/\s+/g, ' ').trim()
   return {
     externalId: raw.sha,
     observedAt: new Date(observed).toISOString(),
-    summary: subject.length > MAX_SUMMARY ? `${subject.slice(0, MAX_SUMMARY - 1)}…` : subject,
+    summary: truncate(raw.subject),
     filesChanged: Math.max(0, Math.trunc(raw.filesChanged)),
   }
+}
+
+function truncate(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > MAX_SUMMARY ? `${flat.slice(0, MAX_SUMMARY - 1)}…` : flat
+}
+
+/** A GitHub repository slug as the Host types it, normalized; null when it is not one. */
+export function githubSlug(input: string): string | null {
+  const slug = input.trim().replace(/^https:\/\/github\.com\//i, '').replace(/\/+$/, '').replace(/\.git$/i, '')
+  return /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(slug) ? slug.toLowerCase() : null
+}
+
+/**
+ * Privacy projection of a merged pull request: number, title, and merge time.
+ * The body, reviews, diff, and file names are never read.
+ */
+export function filterPullRequest(raw: { number: number, title: string, mergedAt: string, changedFiles?: number }): Pick<WorldEvent, 'externalId' | 'observedAt' | 'summary' | 'filesChanged'> {
+  if (!Number.isSafeInteger(raw.number) || raw.number < 1) throw new DomainError('world/invalid', `not a pull request number: ${raw.number}`)
+  const observed = Date.parse(raw.mergedAt)
+  if (Number.isNaN(observed)) throw new DomainError('world/invalid', `bad merge time for #${raw.number}`)
+  return { externalId: `pr:${raw.number}`, observedAt: new Date(observed).toISOString(), summary: truncate(raw.title), filesChanged: Math.max(0, Math.trunc(raw.changedFiles ?? 0)) }
+}
+
+/**
+ * What a GitHub link points at, so link evidence can be checked against a
+ * consented source: a pull request of a repository, or a commit SHA.
+ */
+export type GithubLink =
+  | { readonly kind: 'pull', readonly slug: string, readonly number: number }
+  | { readonly kind: 'commit', readonly slug: string, readonly sha: string }
+
+export function parseGithubLink(url: string): GithubLink | null {
+  const match = url.trim().match(/^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})\/(pull|commit)\/([0-9a-fA-F]+)(?:[/?#].*)?$/)
+  if (match === null) return null
+  const slug = match[1]!.toLowerCase()
+  if (match[2] === 'pull') {
+    const number = Number(match[3])
+    return Number.isSafeInteger(number) && number > 0 && /^\d+$/.test(match[3]!) ? { kind: 'pull', slug, number } : null
+  }
+  return /^[0-9a-fA-F]{7,64}$/.test(match[3]!) ? { kind: 'commit', slug, sha: match[3]!.toLowerCase() } : null
 }
 
 /** Host preferences that bound how proactive the System may be. */
@@ -60,9 +100,21 @@ export interface Preferences {
   readonly systemProposalsPerDay: number
   /** The System's voice in conversations. */
   readonly persona: PersonaStyle
+  /** IANA zone for quiet hours and daily caps; null follows the Host machine's clock. */
+  readonly timeZone: string | null
 }
 
-export const DEFAULT_PREFERENCES: Preferences = { quietHours: { start: 23, end: 8 }, systemProposalsPerDay: 1, persona: 'calm' }
+export const DEFAULT_PREFERENCES: Preferences = { quietHours: { start: 23, end: 8 }, systemProposalsPerDay: 1, persona: 'calm', timeZone: null }
+
+/** Whether the runtime knows this IANA time zone. */
+export function isTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone })
+    return true
+  } catch {
+    return false
+  }
+}
 
 export function inQuietHours(localHour: number, preferences: Pick<Preferences, 'quietHours'>): boolean {
   const quiet = preferences.quietHours

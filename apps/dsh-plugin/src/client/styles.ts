@@ -43,6 +43,9 @@ export const STYLES = `
 .ro-badge[data-tone="err"] { color: var(--ro-err); }
 .ro-badge[data-tone="accent"] { color: var(--ro-accent); }
 .ro-badge[data-tone="muted"] { color: var(--ro-fg-3); }
+.ro-review { margin-top: 8px; padding: 8px 10px; border-left: 2px solid var(--ro-accent); background: var(--ro-hover); border-radius: 4px; }
+.ro-file { position: relative; overflow: hidden; display: inline-block; }
+.ro-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .ro-proposal { margin: 8px 0 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--ro-fg-2); }
 .ro-list { margin: 6px 0 0; padding-left: 18px; color: var(--ro-fg-2); }
 .ro-btn { font: inherit; font-size: 13px; padding: 5px 14px; border-radius: var(--ro-radius); border: 1px solid var(--ro-border); background: transparent; color: var(--ro-fg); cursor: pointer; }

@@ -1,10 +1,12 @@
 // Model-facing text and the tool's argument mapping, kept free of DSH imports
 // so they can be unit-tested. Everything here is presentation: the rules the
 // agent is told about are enforced by the Application layer regardless.
-import type { AgentBrief, CommandOutcome, Result } from '@reorigin/application'
+import type { AgentBrief, CommandOutcome, Result, ReviewableSubmission } from '@reorigin/application'
 import { EVIDENCE_KINDS, QUEST_TYPES } from '@reorigin/domain'
 
 export const TOOL_NAME = 'reorigin_propose_quest'
+export const LIST_REVIEW_TOOL = 'reorigin_list_reviewable'
+export const NOTE_REVIEW_TOOL = 'reorigin_add_review_note'
 
 /** Static persona and boundaries (docs/02 Persona, ADR-003, ADR-005). */
 export const PERSONA = `## Re:Origin 系统
@@ -14,6 +16,7 @@ export const PERSONA = `## Re:Origin 系统
 你能做的：
 - 当对话中出现与宿主目标相关、可以在现实中完成并能留下证据的行动时，调用 \`${TOOL_NAME}\` 提议一个任务。提议会进入宿主的 Re:Origin 面板等待审阅，由宿主决定是否接受。
 - 引用下方「宿主状态」中的事实来解释建议。
+- 当宿主请你点评某个任务的提交时，先用 \`${LIST_REVIEW_TOOL}\` 查看宿主已开放点评的任务及其证据，再用 \`${NOTE_REVIEW_TOOL}\` 留一条附注（例如证据与目标是否相符、还能补充什么）。附注只是参考，不改变核验结论，也不影响奖励；宿主没有开放的任务你看不到，也不要索要。
 
 你不能做的（无论选择哪种人格都一样；系统会拒绝，也不要假装做到）：
 - 不能替宿主接受任务、提交证据、判定完成或发放 XP；不要宣称「任务已完成」「已获得奖励」。完成与奖励只由证据核验和结算规则决定。
@@ -99,4 +102,27 @@ export function describeProposal(result: Result<CommandOutcome>): string {
   }
   if (result.ok) return '提议已处理。'
   return `【提议未被接受】${result.error.code}：${result.error.message}`
+}
+
+
+/** What the list tool returns: only quests the Host opened, with their evidence. */
+export function formatReviewable(submissions: readonly ReviewableSubmission[]): string {
+  if (submissions.length === 0) return '宿主目前没有开放任何任务供你点评。请宿主在 Re:Origin 面板的任务卡片上开启「允许 Agent 点评」。'
+  return submissions.map((item) => {
+    const evidence = item.evidence.length === 0
+      ? '  （尚未提交证据）'
+      : item.evidence.map(ev => `  - [${ev.kind}${ev.corroborated ? '·已佐证' : ev.attested ? '·宿主确认' : ''}] ${ev.ref}${ev.summary === '' ? '' : ` — ${ev.summary}`}（${ev.observedAt}）`).join('\n')
+    return [
+      `任务 ${item.questId}：${item.title}（${item.status}）`,
+      item.objective === '' ? null : `目标：${item.objective}`,
+      `验收：${item.criteria.map(criterion => criterion.description).join('；')}`,
+      `证据：\n${evidence}`,
+      `确定性核验：${item.verdict ?? '尚未核验'}`,
+      item.notes.length === 0 ? null : `你此前的附注：${item.notes.join(' / ')}`,
+    ].filter(line => line !== null).join('\n')
+  }).join('\n\n')
+}
+
+export function describeNote(result: Result<{ noteId: string }>): string {
+  return result.ok ? '【附注已记录】宿主会在任务卡片上看到它；它不改变核验结论。' : `【附注未记录】${result.error.code}：${result.error.message}`
 }

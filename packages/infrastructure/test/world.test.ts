@@ -58,7 +58,7 @@ function quest(payload: object = {}): string {
 }
 
 function grant(): string {
-  const outcome = run('GrantConsent', { source: 'git_repo', scopeRef: '/repo/app', authorEmail: 'Me@Example.com' })
+  const outcome = run('GrantConsent', { source: 'git_repo', scopeRef: '/repo/app', author: 'Me@Example.com' })
   if (outcome.type !== 'GrantConsent') throw new Error('unexpected')
   return outcome.consent.id
 }
@@ -195,10 +195,10 @@ describe('outbox, notices, and memory (P2/P4)', () => {
 
   it('validates consent input', () => {
     bind()
-    expect(app.execute({ commandId: 'bad-grant-1', actor: 'host', issuedAt: clock.now(), schemaVersion: 1, type: 'GrantConsent', payload: { source: 'git_repo', scopeRef: 'relative/path', authorEmail: 'a@b.co' }, hostId }))
+    expect(app.execute({ commandId: 'bad-grant-1', actor: 'host', issuedAt: clock.now(), schemaVersion: 1, type: 'GrantConsent', payload: { source: 'git_repo', scopeRef: 'relative/path', author: 'a@b.co' }, hostId }))
       .toMatchObject({ ok: false, error: { code: 'command/invalid' } })
     grant()
-    expect(app.execute({ commandId: 'dup-grant-1', actor: 'host', issuedAt: clock.now(), schemaVersion: 1, type: 'GrantConsent', payload: { source: 'git_repo', scopeRef: '/repo/app', authorEmail: 'a@b.co' }, hostId }))
+    expect(app.execute({ commandId: 'dup-grant-1', actor: 'host', issuedAt: clock.now(), schemaVersion: 1, type: 'GrantConsent', payload: { source: 'git_repo', scopeRef: '/repo/app', author: 'a@b.co' }, hostId }))
       .toMatchObject({ ok: false, error: { code: 'consent/duplicate' } })
   })
 })
@@ -219,7 +219,7 @@ describe('git collector', () => {
       commitAs('me@example.com', 'c.txt', 'second')
       expect(await isGitRepository(repo)).toBe(true)
       expect(await isGitRepository(tmpdir())).toBe(false)
-      const commits = await readCommits({ repo, authorEmail: 'ME@example.com', since: '2000-01-01' })
+      const commits = await readCommits({ repo, author: 'ME@example.com', since: '2000-01-01' })
       expect(commits.map(item => item.subject)).toEqual(['second', 'add a secret-named file'])
       expect(commits.every(item => /^[0-9a-f]{40}$/.test(item.sha) && item.filesChanged === 1)).toBe(true)
       expect(JSON.stringify(commits)).not.toContain('a.txt')

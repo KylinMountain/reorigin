@@ -39,6 +39,10 @@ export class ReOriginClient {
     return await this.call('exportData', {}) as DataExport
   }
 
+  async importData(document: unknown): Promise<Result<{ rows: number }>> {
+    return await this.call('importData', { document }) as Result<{ rows: number }>
+  }
+
   async agentStatus(): Promise<AgentStatus> {
     return await this.call('agentStatus', {}) as AgentStatus
   }

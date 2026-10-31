@@ -54,6 +54,8 @@ export type EventType =
   | 'skill.assessed.v1'
   | 'achievement.unlocked.v1'
   | 'host.title_equipped.v1'
+  | 'quest.paused.v1'
+  | 'quest.resumed.v1'
 
 export interface StoredVerification extends Verification {
   readonly id: string
@@ -128,6 +130,14 @@ export interface Transaction {
   /** Insert unless the Host already holds this key; returns whether it was new. */
   insertAchievement(achievement: Achievement): boolean
   listAchievements(hostId: string): Achievement[]
+
+  /** Audit events, newest first. */
+  listEvents(limit: number): StoredEvent[]
+
+  /** Every stored record, table by table, for the Host to take away. */
+  exportAll(): Record<string, unknown[]>
+  /** Erase every record, append-only tables included; returns how many rows were removed. Only for the Host's own deletion. */
+  purgeAll(): number
 
   getCommandResult(commandId: string): unknown
   saveCommandResult(commandId: string, commandType: string, result: unknown, at: string): void

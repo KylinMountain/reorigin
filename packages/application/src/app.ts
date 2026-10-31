@@ -73,6 +73,8 @@ export interface Dashboard {
   readonly achievements: readonly Achievement[]
   /** The title the Host chose to display. */
   readonly title: Achievement | null
+  /** Recent audit events, newest first: what changed, when, and on whose command. */
+  readonly audit: readonly StoredEvent[]
   readonly consents: readonly Consent[]
   readonly preferences: Preferences | null
   /** Recently collected commits, offered as corroborated evidence. */
@@ -99,13 +101,22 @@ export type AgentBrief =
 /** What one command returns on success; the same value is replayed for a repeated `commandId`. */
 export type CommandOutcome =
   | { readonly type: 'BindHost' | 'EquipTitle', readonly host: Host }
-  | { readonly type: 'ProposeQuest' | 'AcceptQuest' | 'CancelQuest' | 'SubmitQuestEvidence', readonly quest: Quest }
+  | { readonly type: 'ProposeQuest' | 'AcceptQuest' | 'CancelQuest' | 'PauseQuest' | 'ResumeQuest' | 'SubmitQuestEvidence', readonly quest: Quest }
+  | { readonly type: 'DeleteHost', readonly removedRows: number }
   | { readonly type: 'VerifyQuest', readonly quest: Quest, readonly verification: StoredVerification }
   | { readonly type: 'SettleQuest', readonly entry: LedgerEntry, readonly granted: boolean }
   | { readonly type: 'GrantConsent' | 'RevokeConsent', readonly consent: Consent, readonly deletedEvents?: number }
   | { readonly type: 'UpdatePreferences', readonly preferences: Preferences }
   | { readonly type: 'AddMemory', readonly memory: Memory }
   | { readonly type: 'ForgetMemory' | 'MarkNoticesRead', readonly done: true }
+
+/** Everything the System holds about the Host, as one JSON document they can keep. */
+export interface DataExport {
+  readonly format: 'reorigin-export'
+  readonly formatVersion: 1
+  readonly exportedAt: string
+  readonly tables: Record<string, unknown[]>
+}
 
 export interface TickReport {
   readonly expired: number
@@ -162,7 +173,7 @@ export class ReOriginApp {
       if (host === null) {
         return {
           host, progress: levelForXp(0), chapter: chapterFor(1), quests: [], ledger: [], notices: [], unreadNotices: 0,
-          memories: [], growth: [], skills: [], achievements: [], title: null, consents: [], preferences: null, recentCommits: [],
+          memories: [], growth: [], skills: [], achievements: [], title: null, audit: [], consents: [], preferences: null, recentCommits: [],
         }
       }
       const ledger = tx.listLedger(host.id, 50)
@@ -189,11 +200,17 @@ export class ReOriginApp {
         skills: tx.latestAssessments(host.id),
         achievements,
         title: achievements.find(item => item.kind === 'title' && item.key === host.titleKey) ?? null,
+        audit: tx.listEvents(40),
         consents: tx.listConsents(host.id),
         preferences: tx.getPreferences(host.id),
         recentCommits: tx.listWorldEvents(host.id, new Date(Date.parse(this.clock.now()) - 14 * DAY).toISOString()).slice(0, 20),
       }
     })
+  }
+
+  /** The Host's own records, for them to take away (docs/01 principle 6). */
+  exportData(): DataExport {
+    return this.store.transaction(tx => ({ format: 'reorigin-export', formatVersion: 1, exportedAt: this.clock.now(), tables: tx.exportAll() }))
   }
 
   /**
@@ -590,6 +607,13 @@ export class ReOriginApp {
       case 'MarkNoticesRead':
         tx.markNoticesRead(host.id, at)
         return { type: 'MarkNoticesRead', done: true }
+      case 'DeleteHost': {
+        if (command.payload.confirmName.trim() !== host.displayName) {
+          throw new ApplicationError('host/confirmation-mismatch', 'type the display name exactly to confirm deletion')
+        }
+        // No audit event survives this: the audit trail is the Host's data too.
+        return { type: 'DeleteHost', removedRows: tx.purgeAll() }
+      }
       case 'EquipTitle': {
         const { titleKey } = command.payload
         if (titleKey !== null && !tx.listAchievements(host.id).some(item => item.kind === 'title' && item.key === titleKey)) {
@@ -617,6 +641,18 @@ export class ReOriginApp {
       }
       case 'CancelQuest':
         return { type: 'CancelQuest', quest: move(quest, 'CANCELLED') }
+      case 'PauseQuest': {
+        const paused = move(quest, 'PAUSED')
+        emit('quest.paused.v1', quest.id, {})
+        return { type: 'PauseQuest', quest: paused }
+      }
+      case 'ResumeQuest': {
+        // ACCEPTED → IN_PROGRESS is a legal edge too; resuming is only for what was paused.
+        if (quest.status !== 'PAUSED') throw new ApplicationError('quest/illegal-transition', `quest ${quest.id} is ${quest.status}, not PAUSED`)
+        const resumed = move(quest, 'IN_PROGRESS')
+        emit('quest.resumed.v1', quest.id, { expiresAt: resumed.expiresAt })
+        return { type: 'ResumeQuest', quest: resumed }
+      }
       case 'SubmitQuestEvidence': {
         let current = quest.status === 'ACCEPTED' ? move(quest, 'IN_PROGRESS') : quest
         const evidence: Evidence[] = command.payload.evidence.map(item => {

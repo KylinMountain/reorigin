@@ -86,4 +86,6 @@ export const STYLES = `
 }
 @media (prefers-reduced-motion: reduce) { .ro-overlay, .ro-line, .ro-level-big, .ro-bar > span { animation: none; transition: none; } }
 .ro-toast { border-color: var(--ro-ok); }
+.ro-btn.ro-danger { border-color: var(--ro-err); color: var(--ro-err); }
+.ro-audit { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 `

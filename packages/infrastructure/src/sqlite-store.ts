@@ -16,7 +16,8 @@ export class SqliteStore implements Store {
 
   constructor(path: string) {
     this.db = new DatabaseSync(path)
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
+    // secure_delete zeroes freed pages, so erased Host data does not linger in the file.
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;')
     migrate(this.db)
     this.tx = createTransaction(this.db)
   }
@@ -31,6 +32,11 @@ export class SqliteStore implements Store {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Fold the WAL back into the main file; after an erase, no old page versions remain in the log. */
+  checkpoint(): void {
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
   }
 
   close(): void {
@@ -67,9 +73,11 @@ function createTransaction(db: DatabaseSync): Transaction {
       ...questColumns(quest))
     },
     updateQuest(quest, expectedRevision) {
-      const changed = run(`UPDATE quests SET status = ?, revision = ?, accepted_at = ?, closed_at = ?, evidence_ids_json = ?
+      const changed = run(`UPDATE quests SET status = ?, revision = ?, accepted_at = ?, closed_at = ?, evidence_ids_json = ?,
+                             expires_at = ?, paused_at = ?
                            WHERE id = ? AND revision = ?`,
-      quest.status, quest.revision, quest.acceptedAt, quest.closedAt, JSON.stringify(quest.evidenceIds), quest.id, expectedRevision)
+      quest.status, quest.revision, quest.acceptedAt, quest.closedAt, JSON.stringify(quest.evidenceIds), quest.expiresAt, quest.pausedAt,
+      quest.id, expectedRevision)
       if (changed !== 1) throw new ApplicationError('store/conflict', `quest ${quest.id} changed concurrently`)
     },
 
@@ -233,6 +241,28 @@ function createTransaction(db: DatabaseSync): Transaction {
       return all('SELECT * FROM achievements WHERE host_id = ? ORDER BY granted_at, rowid', hostId).map(toAchievement)
     },
 
+    listEvents(limit) {
+      return all('SELECT * FROM events ORDER BY occurred_at DESC, rowid DESC LIMIT ?', limit).map(toEvent)
+    },
+
+    exportAll() {
+      const tables: Record<string, unknown[]> = {}
+      for (const table of PERSONAL_TABLES) {
+        tables[table] = all(`SELECT * FROM ${table} ORDER BY rowid`).map(row => Object.fromEntries(Object.entries(row).map(([column, value]) => [
+          column.replace(/_json$/, ''),
+          column.endsWith('_json') && typeof value === 'string' ? JSON.parse(value) : value,
+        ])))
+      }
+      return tables
+    },
+    purgeAll() {
+      run('INSERT INTO purge_guard (active) VALUES (1)')
+      let removed = 0
+      for (const table of PURGE_ORDER) removed += run(`DELETE FROM ${table}`)
+      run('DELETE FROM purge_guard')
+      return removed
+    },
+
     getCommandResult(commandId) {
       const row = one('SELECT result_json FROM processed_commands WHERE command_id = ?', commandId)
       return row === undefined ? undefined : JSON.parse(String(row.result_json))
@@ -243,6 +273,17 @@ function createTransaction(db: DatabaseSync): Transaction {
     },
   }
 }
+
+/** Every table holding the Host's records; one Host per installation, so "the Host's" means all rows. */
+const PERSONAL_TABLES = [
+  'hosts', 'quests', 'evidence', 'verifications', 'reward_ledger', 'skill_assessments', 'achievements',
+  'consents', 'world_events', 'notices', 'memories', 'events',
+] as const
+/** Children before parents, so foreign keys hold at every step. Command results go too: they echo payloads. */
+const PURGE_ORDER = [
+  'outbox', 'events', 'processed_commands', 'reward_ledger', 'verifications', 'evidence', 'skill_assessments', 'achievements',
+  'notices', 'memories', 'world_events', 'consents', 'quests', 'hosts',
+] as const
 
 function questColumns(quest: Quest): SQLInputValue[] {
   return [quest.id, quest.hostId, quest.type, quest.source, quest.title, quest.objective, JSON.stringify(quest.criteria),
@@ -278,6 +319,7 @@ function toQuest(row: Row): Quest {
     closedAt: nullableText(row.closed_at),
     evidenceIds: JSON.parse(text(row.evidence_ids_json)),
     expiresAt: nullableText(row.expires_at),
+    pausedAt: nullableText(row.paused_at),
     skill: text(row.skill),
     sourceKey: nullableText(row.source_key),
   }

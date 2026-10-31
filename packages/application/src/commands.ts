@@ -58,6 +58,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...envelope, type: z.literal('AcceptQuest'), hostId: id, payload: z.object({ questId: id }) }),
   z.object({ ...envelope, type: z.literal('CancelQuest'), hostId: id, payload: z.object({ questId: id }) }),
+  z.object({ ...envelope, type: z.literal('PauseQuest'), hostId: id, payload: z.object({ questId: id }) }),
+  z.object({ ...envelope, type: z.literal('ResumeQuest'), hostId: id, payload: z.object({ questId: id }) }),
   z.object({
     ...envelope,
     type: z.literal('SubmitQuestEvidence'),
@@ -94,6 +96,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ ...envelope, type: z.literal('AddMemory'), hostId: id, payload: z.object({ text: z.string().min(1).max(300) }) }),
   z.object({ ...envelope, type: z.literal('ForgetMemory'), hostId: id, payload: z.object({ memoryId: id }) }),
   z.object({ ...envelope, type: z.literal('MarkNoticesRead'), hostId: id, payload: z.object({}) }),
+  /** Erase every record the System holds. The Host retypes their display name to confirm. */
+  z.object({ ...envelope, type: z.literal('DeleteHost'), hostId: id, payload: z.object({ confirmName: z.string().min(1).max(MAX_DISPLAY_NAME) }) }),
   /** Display an unlocked title, or none with null. */
   z.object({ ...envelope, type: z.literal('EquipTitle'), hostId: id, payload: z.object({ titleKey: z.string().min(1).max(80).nullable() }) }),
 ])
@@ -115,6 +119,8 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   ProposeQuest: ['host', 'agent', 'system'],
   AcceptQuest: ['host'],
   CancelQuest: ['host'],
+  PauseQuest: ['host'],
+  ResumeQuest: ['host'],
   SubmitQuestEvidence: ['host'],
   VerifyQuest: ['host', 'system'],
   SettleQuest: ['host', 'system'],
@@ -126,4 +132,5 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   ForgetMemory: ['host'],
   MarkNoticesRead: ['host'],
   EquipTitle: ['host'],
+  DeleteHost: ['host'],
 }

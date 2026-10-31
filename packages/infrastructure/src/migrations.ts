@@ -168,6 +168,18 @@ const MIGRATIONS: readonly string[] = [
    CREATE TRIGGER assessments_append_only_delete BEFORE DELETE ON skill_assessments BEGIN SELECT RAISE(ABORT, 'assessments are append-only'); END;
    CREATE TRIGGER achievements_append_only_update BEFORE UPDATE ON achievements BEGIN SELECT RAISE(ABORT, 'achievements are append-only'); END;
    CREATE TRIGGER achievements_append_only_delete BEFORE DELETE ON achievements BEGIN SELECT RAISE(ABORT, 'achievements are append-only'); END;`,
+  // Host sovereignty: pausing quests, and erasing every record when the Host deletes their data.
+  // Append-only tables still refuse deletes, except inside a purge that holds the purge_guard row.
+  `ALTER TABLE quests ADD COLUMN paused_at TEXT;
+   CREATE TABLE purge_guard (active INTEGER NOT NULL);
+   DROP TRIGGER events_append_only_delete;
+   CREATE TRIGGER events_append_only_delete BEFORE DELETE ON events WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+   DROP TRIGGER ledger_append_only_delete;
+   CREATE TRIGGER ledger_append_only_delete BEFORE DELETE ON reward_ledger WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+   DROP TRIGGER assessments_append_only_delete;
+   CREATE TRIGGER assessments_append_only_delete BEFORE DELETE ON skill_assessments WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'assessments are append-only'); END;
+   DROP TRIGGER achievements_append_only_delete;
+   CREATE TRIGGER achievements_append_only_delete BEFORE DELETE ON achievements WHEN NOT EXISTS (SELECT 1 FROM purge_guard) BEGIN SELECT RAISE(ABORT, 'achievements are append-only'); END;`,
 ]
 
 export const SCHEMA_VERSION = MIGRATIONS.length

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import type { Dashboard, QuestView } from '@reorigin/application'
 import type { EvidenceKind, QuestType, WorldEvent } from '@reorigin/domain'
 import { RemoteFailure, type AgentStatus, type ReOriginClient } from './api.ts'
-import { Achievements, Growth, Memories, Notices, Settings } from './Cards.tsx'
+import { Achievements, Audit, Growth, Memories, Notices, Settings } from './Cards.tsx'
 import { Awakening, LevelUp } from './Overlays.tsx'
 import { EVIDENCE_KIND, QUEST_TYPE, SOURCE, STATUS, describeReason, relativeTime, type Ctx, type Run } from './shared.ts'
 
@@ -144,6 +144,7 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
       <Growth dashboard={dashboard} />
       <Achievements dashboard={dashboard} {...ctx} />
       <Memories dashboard={dashboard} {...ctx} />
+      <Audit dashboard={dashboard} />
 
       {closed.length > 0 && <p className="ro-section-title">历史（{closed.length}）</p>}
       {closed.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} {...ctx} />)}
@@ -202,7 +203,7 @@ function NewQuestForm({ run, busy, client, hostId }: Ctx) {
 
 function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[] } & Ctx) {
   const status = STATUS[quest.status]
-  const act = (type: 'AcceptQuest' | 'CancelQuest' | 'VerifyQuest' | 'SettleQuest', message: string) =>
+  const act = (type: 'AcceptQuest' | 'CancelQuest' | 'PauseQuest' | 'ResumeQuest' | 'VerifyQuest' | 'SettleQuest', message: string) =>
     () => void run(() => client.execute(type, { questId: quest.id }, hostId), message)
   const canSubmit = ['ACCEPTED', 'IN_PROGRESS', 'NEEDS_EVIDENCE'].includes(quest.status)
   const verification = quest.lastVerification
@@ -217,7 +218,15 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
   } else if (quest.status === 'COMPLETED' && !quest.settled) {
     actions = <button className="ro-btn" data-primary disabled={busy} onClick={act('SettleQuest', `结算完成：+${quest.reward.xp} XP`)}>领取奖励 +{quest.reward.xp} XP</button>
   } else if (quest.status === 'ACCEPTED' || quest.status === 'IN_PROGRESS') {
-    actions = <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
+    actions = <>
+      <button className="ro-btn" disabled={busy} onClick={act('PauseQuest', '任务已暂停，期限在暂停期间不计时。')}>暂停</button>
+      <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
+    </>
+  } else if (quest.status === 'PAUSED') {
+    actions = <>
+      <button className="ro-btn" data-primary disabled={busy} onClick={act('ResumeQuest', '任务已恢复，期限顺延。')}>继续任务</button>
+      <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
+    </>
   }
   const open = !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(quest.status)
   return (
@@ -243,7 +252,7 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
       </ul>
       <p className="ro-muted" style={{ margin: '6px 0 0' }}>
         来源：{SOURCE[quest.source]} · 已提交证据 {quest.evidenceIds.length} 份
-        {quest.expiresAt !== null && open && ` · 期限：${relativeTime(quest.expiresAt)}`}
+        {quest.expiresAt !== null && open && (quest.status === 'PAUSED' ? ' · 期限已冻结，恢复后顺延' : ` · 期限：${relativeTime(quest.expiresAt)}`)}
       </p>
       {verification !== null && verification.verdict !== 'pass' && (
         <div style={{ marginTop: 8 }}>

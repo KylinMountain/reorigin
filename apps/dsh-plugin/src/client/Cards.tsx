@@ -2,9 +2,9 @@
 // (consented data sources and how proactive the System may be).
 import { useState, type FormEvent } from 'react'
 import type { Dashboard } from '@reorigin/application'
-import { CONFIDENCE_LABEL, SKILL_TIERS, tierLabel, type SkillTier } from '@reorigin/domain'
+import { CONFIDENCE_LABEL, SKILL_TIERS, tierLabel, type QuestStatus, type SkillTier } from '@reorigin/domain'
 import { setVoiceEnabled, voiceEnabled } from './Overlays.tsx'
-import { relativeTime, type Ctx } from './shared.ts'
+import { EVENT_LABEL, STATUS, eventActor, relativeTime, type Ctx } from './shared.ts'
 
 export function Notices({ dashboard, run, busy, client, hostId }: { dashboard: Dashboard } & Ctx) {
   if (dashboard.notices.length === 0) return null
@@ -198,6 +198,82 @@ export function Settings({ dashboard, run, busy, client, hostId }: { dashboard: 
         )}>保存主动程度</button>
         <button className="ro-btn" disabled={busy} onClick={() => void run(() => client.syncNow(), '已与授权数据源同步。')}>立即同步</button>
       </div>
+
+      <DataRights dashboard={dashboard} run={run} busy={busy} client={client} hostId={hostId} />
     </div>
   )
+}
+
+/** Take everything away, or erase it (docs/01 principle 6). */
+function DataRights({ dashboard, run, busy, client, hostId }: { dashboard: Dashboard } & Ctx) {
+  const [confirm, setConfirm] = useState('')
+  const name = dashboard.host?.displayName ?? ''
+  const download = () => void run(async () => {
+    const data = await client.exportData()
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `reorigin-export-${data.exportedAt.slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }, '已导出全部数据。')
+  return (
+    <>
+      <p className="ro-section-title">我的数据</p>
+      <p className="ro-muted" style={{ margin: 0 }}>
+        所有数据只保存在本机（DSH 目录下的 reorigin.db）。导出会得到一份包含宿主资料、任务、证据、核验、账本、评估、成就、授权、采集记录、消息、记忆与审计事件的 JSON。
+      </p>
+      <div><button className="ro-btn" disabled={busy} onClick={download}>导出全部数据</button></div>
+      <p className="ro-muted" style={{ margin: 0 }}>
+        删除会抹去以上全部记录，包括只追加的审计与账本，且无法恢复；系统回到未绑定状态。建议先导出。
+      </p>
+      <div className="ro-row">
+        <input className="ro-input" style={{ flex: 1, minWidth: 160 }} value={confirm} onChange={e => setConfirm(e.target.value)} placeholder={`输入宿主称呼「${name}」以确认`} aria-label="确认宿主称呼" />
+        <button className="ro-btn ro-danger" disabled={busy || confirm.trim() !== name} onClick={() => void run(
+          () => client.execute('DeleteHost', { confirmName: confirm }, hostId),
+          '所有数据已删除。',
+        )}>删除全部数据</button>
+      </div>
+    </>
+  )
+}
+
+export function Audit({ dashboard }: { dashboard: Dashboard }) {
+  const [open, setOpen] = useState(false)
+  if (dashboard.audit.length === 0) return null
+  return (
+    <div className="ro-card" data-testid="reorigin-audit">
+      <div className="ro-row ro-spread">
+        <p className="ro-section-title">审计记录</p>
+        <button className="ro-btn" onClick={() => setOpen(!open)}>{open ? '收起' : `查看最近 ${dashboard.audit.length} 条`}</button>
+      </div>
+      <p className="ro-muted" style={{ margin: '4px 0 0' }}>每一次状态变化都写入只追加的事件表，标明由宿主、Agent 还是系统引起。</p>
+      {open && (
+        <ul className="ro-feed">
+          {dashboard.audit.map(event => (
+            <li key={event.eventId} className="ro-audit">
+              <span className="ro-muted ro-mono">{new Date(event.occurredAt).toLocaleString()}</span>
+              <span className="ro-badge" data-tone={eventActor(event.causationId) === '宿主' ? 'muted' : 'accent'}>{eventActor(event.causationId)}</span>
+              <span>{EVENT_LABEL[event.type] ?? event.type}{describeEvent(event.payload)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+const VERDICT: Record<string, string> = { pass: '通过', needs_evidence: '需补证', reject: '驳回' }
+
+function describeEvent(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) return ''
+  const fields = payload as Record<string, unknown>
+  const status = (value: string): string => STATUS[value as QuestStatus]?.label ?? value
+  if (typeof fields.from === 'string' && typeof fields.to === 'string') return `：${status(fields.from)} → ${status(fields.to)}`
+  if (typeof fields.title === 'string') return `：「${fields.title}」`
+  if (typeof fields.name === 'string') return `：${fields.name}`
+  if (typeof fields.skill === 'string') return `：${fields.skill}`
+  if (typeof fields.verdict === 'string') return `：${VERDICT[fields.verdict] ?? fields.verdict}`
+  if (typeof fields.amount === 'number') return `：+${fields.amount}`
+  return ''
 }

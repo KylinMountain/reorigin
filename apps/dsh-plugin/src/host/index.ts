@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol'
-import { ReOriginApp, type CommandOutcome, type Dashboard, type Result, type TickReport } from '@reorigin/application'
+import { ReOriginApp, type CommandOutcome, type Dashboard, type DataExport, type Result, type TickReport } from '@reorigin/application'
 import { SqliteStore, isGitRepository, randomIds, readCommits, systemClock } from '@reorigin/infrastructure'
 import { REMOTE_METHODS, REMOTE_NAMESPACE } from '../shared/remote.ts'
 import { AgentLink, agentPlugin, type AgentStatus } from './agent.ts'
@@ -29,6 +29,7 @@ export function databasePath(): string {
 export default class ReOriginService extends Service {
   readonly typertRemote: unknown
   private readonly app: ReOriginApp
+  private readonly store: SqliteStore
   private readonly agentLink = new AgentLink()
 
   constructor(ctx: Context) {
@@ -37,6 +38,7 @@ export default class ReOriginService extends Service {
     const path = databasePath()
     mkdirSync(join(path, '..'), { recursive: true })
     const store = new SqliteStore(path)
+    this.store = store
     this.app = new ReOriginApp({ store, clock: systemClock, ids: randomIds })
     ctx.effect(() => () => store.close(), 'reorigin: close store')
     // Waits for DSH's tools and systemPrompt services; a profile without an agent plane just never mounts it.
@@ -56,6 +58,10 @@ export default class ReOriginService extends Service {
     return this.app.dashboard()
   }
 
+  exportData(): DataExport {
+    return this.app.exportData()
+  }
+
   agentStatus(): AgentStatus {
     return this.agentLink.status()
   }
@@ -71,6 +77,8 @@ export default class ReOriginService extends Service {
       }
     }
     const result = this.app.execute(asHost)
+    // Erased rows must not survive in the write-ahead log either.
+    if (result.ok && result.value.type === 'DeleteHost') this.store.checkpoint()
     // Grants and revocations change what the System sees; reflect them right away.
     if (result.ok && (result.value.type === 'GrantConsent' || result.value.type === 'SettleQuest')) await this.syncNow()
     return result

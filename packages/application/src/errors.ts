@@ -10,6 +10,7 @@ export type ApplicationErrorCode =
   | 'consent/duplicate'
   | 'memory/not-found'
   | 'title/locked'
+  | 'host/confirmation-mismatch'
   | 'host/not-bound'
   | 'host/already-bound'
   | 'quest/not-found'

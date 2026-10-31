@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { ApplicationError, type Memory, type Notice, type StoredEvent, type StoredVerification, type Store, type Transaction } from '@reorigin/application'
-import { DEFAULT_PREFERENCES, type Consent, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type WorldEvent } from '@reorigin/domain'
+import { DEFAULT_PREFERENCES, type Achievement, type Consent, type Correction, type Evidence, type Host, type LedgerEntry, type Preferences, type Quest, type SkillAssessment, type WorldEvent } from '@reorigin/domain'
 import { migrate } from './migrations.ts'
 
 type Row = Record<string, SQLInputValue>
@@ -16,7 +16,8 @@ export class SqliteStore implements Store {
 
   constructor(path: string) {
     this.db = new DatabaseSync(path)
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
+    // secure_delete zeroes freed pages, so erased Host data does not linger in the file.
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;')
     migrate(this.db)
     this.tx = createTransaction(this.db)
   }
@@ -31,6 +32,11 @@ export class SqliteStore implements Store {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Fold the WAL back into the main file; after an erase, no old page versions remain in the log. */
+  checkpoint(): void {
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
   }
 
   close(): void {
@@ -67,9 +73,11 @@ function createTransaction(db: DatabaseSync): Transaction {
       ...questColumns(quest))
     },
     updateQuest(quest, expectedRevision) {
-      const changed = run(`UPDATE quests SET status = ?, revision = ?, accepted_at = ?, closed_at = ?, evidence_ids_json = ?
+      const changed = run(`UPDATE quests SET status = ?, revision = ?, accepted_at = ?, closed_at = ?, evidence_ids_json = ?,
+                             expires_at = ?, paused_at = ?
                            WHERE id = ? AND revision = ?`,
-      quest.status, quest.revision, quest.acceptedAt, quest.closedAt, JSON.stringify(quest.evidenceIds), quest.id, expectedRevision)
+      quest.status, quest.revision, quest.acceptedAt, quest.closedAt, JSON.stringify(quest.evidenceIds), quest.expiresAt, quest.pausedAt,
+      quest.id, expectedRevision)
       if (changed !== 1) throw new ApplicationError('store/conflict', `quest ${quest.id} changed concurrently`)
     },
 
@@ -111,6 +119,13 @@ function createTransaction(db: DatabaseSync): Transaction {
     },
     totalXp(hostId) {
       return Number(one(`SELECT COALESCE(SUM(amount), 0) AS xp FROM reward_ledger WHERE host_id = ? AND reward_type = 'xp'`, hostId)!.xp)
+    },
+    questXp(hostId) {
+      const rows = all(`SELECT quest_id, SUM(amount) AS net FROM reward_ledger WHERE host_id = ? AND reward_type = 'xp' GROUP BY quest_id`, hostId)
+      return new Map(rows.map(row => [text(row.quest_id), Number(row.net)]))
+    },
+    ledgerFor(questId) {
+      return all('SELECT * FROM reward_ledger WHERE quest_id = ? ORDER BY granted_at, rowid', questId).map(toLedgerEntry)
     },
     listLedger(hostId, limit) {
       return all('SELECT * FROM reward_ledger WHERE host_id = ? ORDER BY granted_at DESC, rowid DESC LIMIT ?', hostId, limit).map(toLedgerEntry)
@@ -203,8 +218,70 @@ function createTransaction(db: DatabaseSync): Transaction {
     listMemories(hostId, limit) {
       return all('SELECT * FROM memories WHERE host_id = ? AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?', hostId, limit).map(toMemory)
     },
+    forgetMemoriesFrom(hostId, sourceRef, at) {
+      return run('UPDATE memories SET forgotten_at = ? WHERE host_id = ? AND source_ref = ? AND forgotten_at IS NULL', at, hostId, sourceRef)
+    },
     forgetMemory(hostId, memoryId, at) {
       return run('UPDATE memories SET forgotten_at = ? WHERE id = ? AND host_id = ? AND forgotten_at IS NULL', at, memoryId, hostId) === 1
+    },
+
+    setHostTitle(hostId, titleKey) {
+      run('UPDATE hosts SET title_key = ? WHERE id = ?', titleKey, hostId)
+    },
+
+    insertAssessment(assessment) {
+      run(`INSERT INTO skill_assessments (id, host_id, skill, tier, confidence, rule_version, basis_json, quest_ids_json, evidence_ids_json, assessed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      assessment.id, assessment.hostId, assessment.skill, assessment.tier, assessment.confidence, assessment.ruleVersion,
+      JSON.stringify(assessment.basis), JSON.stringify(assessment.questIds), JSON.stringify(assessment.evidenceIds), assessment.assessedAt)
+    },
+    latestAssessments(hostId) {
+      return all(`SELECT * FROM skill_assessments s
+                  WHERE s.host_id = ? AND s.rowid = (SELECT MAX(rowid) FROM skill_assessments t WHERE t.host_id = s.host_id AND t.skill = s.skill)
+                  ORDER BY s.tier DESC, s.skill`, hostId).map(toAssessment)
+    },
+
+    insertAchievement(achievement) {
+      return run(`INSERT INTO achievements (id, host_id, key, kind, name, description, rule_version, cause_ref, granted_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (host_id, key) DO NOTHING`,
+      achievement.id, achievement.hostId, achievement.key, achievement.kind, achievement.name, achievement.description,
+      achievement.ruleVersion, achievement.causeRef, achievement.grantedAt) === 1
+    },
+    listAchievements(hostId) {
+      return all('SELECT * FROM achievements WHERE host_id = ? ORDER BY granted_at, rowid', hostId).map(toAchievement)
+    },
+
+    insertCorrection(correction) {
+      run(`INSERT INTO corrections (id, host_id, quest_id, reason, xp_reversed, corrected_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        correction.id, correction.hostId, correction.questId, correction.reason, correction.xpReversed, correction.correctedAt)
+    },
+    listCorrections(hostId) {
+      return all('SELECT * FROM corrections WHERE host_id = ? ORDER BY corrected_at, rowid', hostId).map(row => ({
+        id: text(row.id), hostId: text(row.host_id), questId: text(row.quest_id), reason: text(row.reason),
+        xpReversed: Number(row.xp_reversed), correctedAt: text(row.corrected_at),
+      }) satisfies Correction)
+    },
+
+    listEvents(limit) {
+      return all('SELECT * FROM events ORDER BY occurred_at DESC, rowid DESC LIMIT ?', limit).map(toEvent)
+    },
+
+    exportAll() {
+      const tables: Record<string, unknown[]> = {}
+      for (const table of PERSONAL_TABLES) {
+        tables[table] = all(`SELECT * FROM ${table} ORDER BY rowid`).map(row => Object.fromEntries(Object.entries(row).map(([column, value]) => [
+          column.replace(/_json$/, ''),
+          column.endsWith('_json') && typeof value === 'string' ? JSON.parse(value) : value,
+        ])))
+      }
+      return tables
+    },
+    purgeAll() {
+      run('INSERT INTO purge_guard (active) VALUES (1)')
+      let removed = 0
+      for (const table of PURGE_ORDER) removed += run(`DELETE FROM ${table}`)
+      run('DELETE FROM purge_guard')
+      return removed
     },
 
     getCommandResult(commandId) {
@@ -218,6 +295,17 @@ function createTransaction(db: DatabaseSync): Transaction {
   }
 }
 
+/** Every table holding the Host's records; one Host per installation, so "the Host's" means all rows. */
+const PERSONAL_TABLES = [
+  'hosts', 'quests', 'evidence', 'verifications', 'reward_ledger', 'corrections', 'skill_assessments', 'achievements',
+  'consents', 'world_events', 'notices', 'memories', 'events',
+] as const
+/** Children before parents, so foreign keys hold at every step. Command results go too: they echo payloads. */
+const PURGE_ORDER = [
+  'outbox', 'events', 'processed_commands', 'corrections', 'reward_ledger', 'verifications', 'evidence', 'skill_assessments', 'achievements',
+  'notices', 'memories', 'world_events', 'consents', 'quests', 'hosts',
+] as const
+
 function questColumns(quest: Quest): SQLInputValue[] {
   return [quest.id, quest.hostId, quest.type, quest.source, quest.title, quest.objective, JSON.stringify(quest.criteria),
     quest.reward.ruleVersion, quest.reward.xp, quest.status, quest.revision, quest.proposedAt, quest.acceptedAt,
@@ -228,7 +316,10 @@ const text = (value: SQLInputValue | undefined): string => String(value)
 const nullableText = (value: SQLInputValue | undefined): string | null => value === null || value === undefined ? null : String(value)
 
 function toHost(row: Row): Host {
-  return { id: text(row.id), displayName: text(row.display_name), goals: JSON.parse(text(row.goals_json)), boundAt: text(row.bound_at) }
+  return {
+    id: text(row.id), displayName: text(row.display_name), goals: JSON.parse(text(row.goals_json)), boundAt: text(row.bound_at),
+    titleKey: nullableText(row.title_key),
+  }
 }
 
 function toQuest(row: Row): Quest {
@@ -249,6 +340,7 @@ function toQuest(row: Row): Quest {
     closedAt: nullableText(row.closed_at),
     evidenceIds: JSON.parse(text(row.evidence_ids_json)),
     expiresAt: nullableText(row.expires_at),
+    pausedAt: nullableText(row.paused_at),
     skill: text(row.skill),
     sourceKey: nullableText(row.source_key),
   }
@@ -342,6 +434,35 @@ function toMemory(row: Row): Memory {
     sourceRef: nullableText(row.source_ref),
     createdAt: text(row.created_at),
     forgottenAt: nullableText(row.forgotten_at),
+  }
+}
+
+function toAssessment(row: Row): SkillAssessment {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    skill: text(row.skill),
+    tier: Number(row.tier) as SkillAssessment['tier'],
+    confidence: text(row.confidence) as SkillAssessment['confidence'],
+    ruleVersion: text(row.rule_version),
+    basis: JSON.parse(text(row.basis_json)),
+    questIds: JSON.parse(text(row.quest_ids_json)),
+    evidenceIds: JSON.parse(text(row.evidence_ids_json)),
+    assessedAt: text(row.assessed_at),
+  }
+}
+
+function toAchievement(row: Row): Achievement {
+  return {
+    id: text(row.id),
+    hostId: text(row.host_id),
+    key: text(row.key),
+    kind: text(row.kind) as Achievement['kind'],
+    name: text(row.name),
+    description: text(row.description),
+    ruleVersion: text(row.rule_version),
+    causeRef: nullableText(row.cause_ref),
+    grantedAt: text(row.granted_at),
   }
 }
 

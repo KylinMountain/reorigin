@@ -1,4 +1,4 @@
-import type { CommandOutcome, CommandType, Dashboard, Result } from '@reorigin/application'
+import type { CommandOutcome, CommandType, Dashboard, DataExport, Result } from '@reorigin/application'
 import type { AgentStatus } from '../host/agent.ts'
 import { REMOTE_NAMESPACE, type RemoteMethod } from '../shared/remote.ts'
 
@@ -33,6 +33,10 @@ export class ReOriginClient {
 
   async syncNow(): Promise<unknown> {
     return await this.call('syncNow', {})
+  }
+
+  async exportData(): Promise<DataExport> {
+    return await this.call('exportData', {}) as DataExport
   }
 
   async agentStatus(): Promise<AgentStatus> {

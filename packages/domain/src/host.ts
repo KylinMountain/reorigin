@@ -7,6 +7,8 @@ export interface Host {
   /** Long-term goals the Host declared at binding; quests reference them in prose only. */
   readonly goals: readonly string[]
   readonly boundAt: string
+  /** Key of the unlocked title the Host chose to display; null shows none. */
+  readonly titleKey: string | null
 }
 
 export const MAX_DISPLAY_NAME = 40
@@ -19,5 +21,5 @@ export function bindHost(input: { id: string, displayName: string, goals: readon
   }
   const goals = input.goals.map(goal => goal.trim()).filter(goal => goal.length > 0)
   if (goals.length > MAX_GOALS) throw new DomainError('host/invalid', `at most ${MAX_GOALS} goals`)
-  return { id: input.id, displayName, goals, boundAt: input.at }
+  return { id: input.id, displayName, goals, boundAt: input.at, titleKey: null }
 }

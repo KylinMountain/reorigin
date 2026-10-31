@@ -1,10 +1,10 @@
-import type { Consent, Evidence, Host, LedgerEntry, Preferences, Quest, Verification, WorldEvent } from '@reorigin/domain'
+import type { Achievement, Consent, Correction, Evidence, Host, LedgerEntry, Preferences, Quest, SkillAssessment, Verification, WorldEvent } from '@reorigin/domain'
 
 /** A System message in the panel feed; one per source key. */
 export interface Notice {
   readonly id: string
   readonly hostId: string
-  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge'
+  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement' | 'correction'
   readonly title: string
   readonly body: string
   readonly createdAt: string
@@ -51,6 +51,13 @@ export type EventType =
   | 'memory.added.v1'
   | 'memory.forgotten.v1'
   | 'system.nudged.v1'
+  | 'skill.assessed.v1'
+  | 'achievement.unlocked.v1'
+  | 'host.title_equipped.v1'
+  | 'quest.paused.v1'
+  | 'quest.resumed.v1'
+  | 'quest.retracted.v1'
+  | 'reward.reversed.v1'
 
 export interface StoredVerification extends Verification {
   readonly id: string
@@ -64,6 +71,7 @@ export interface StoredVerification extends Verification {
 export interface Transaction {
   getHost(): Host | undefined
   insertHost(host: Host): void
+  setHostTitle(hostId: string, titleKey: string | null): void
 
   getQuest(questId: string): Quest | undefined
   listQuests(hostId: string): Quest[]
@@ -83,6 +91,12 @@ export interface Transaction {
   insertLedgerEntry(entry: LedgerEntry): { entry: LedgerEntry, inserted: boolean }
   totalXp(hostId: string): number
   listLedger(hostId: string, limit: number): LedgerEntry[]
+  /** Net XP per settled quest (grants plus reversals); a quest is absent if it was never settled. */
+  questXp(hostId: string): Map<string, number>
+  ledgerFor(questId: string): LedgerEntry[]
+
+  insertCorrection(correction: Correction): void
+  listCorrections(hostId: string): Correction[]
 
   appendEvent(event: StoredEvent): void
   /** Outbox rows not yet dispatched, oldest first. */
@@ -116,6 +130,24 @@ export interface Transaction {
   insertMemory(memory: Memory): boolean
   listMemories(hostId: string, limit: number): Memory[]
   forgetMemory(hostId: string, memoryId: string, at: string): boolean
+  /** Forget every memory derived from `sourceRef` (e.g. a retracted quest's milestone); returns how many. */
+  forgetMemoriesFrom(hostId: string, sourceRef: string, at: string): number
+
+  /** Assessments are append-only; a re-reading adds a row, and the latest row per skill is current. */
+  insertAssessment(assessment: SkillAssessment): void
+  latestAssessments(hostId: string): SkillAssessment[]
+
+  /** Insert unless the Host already holds this key; returns whether it was new. */
+  insertAchievement(achievement: Achievement): boolean
+  listAchievements(hostId: string): Achievement[]
+
+  /** Audit events, newest first. */
+  listEvents(limit: number): StoredEvent[]
+
+  /** Every stored record, table by table, for the Host to take away. */
+  exportAll(): Record<string, unknown[]>
+  /** Erase every record, append-only tables included; returns how many rows were removed. Only for the Host's own deletion. */
+  purgeAll(): number
 
   getCommandResult(commandId: string): unknown
   saveCommandResult(commandId: string, commandType: string, result: unknown, at: string): void

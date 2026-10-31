@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { Dashboard, QuestView } from '@reorigin/application'
-import type { EvidenceKind, QuestType, WorldEvent } from '@reorigin/domain'
+import { PERSONA_STYLE_INFO, type EvidenceKind, type PersonaStyle, type QuestType, type WorldEvent } from '@reorigin/domain'
 import { RemoteFailure, type AgentStatus, type ReOriginClient } from './api.ts'
-import { Growth, Memories, Notices, Settings } from './Cards.tsx'
+import { Achievements, Audit, Growth, Memories, Notices, Settings } from './Cards.tsx'
 import { Awakening, LevelUp } from './Overlays.tsx'
 import { EVIDENCE_KIND, QUEST_TYPE, SOURCE, STATUS, describeReason, relativeTime, type Ctx, type Run } from './shared.ts'
 
@@ -92,10 +92,11 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
 function BindForm({ run, busy, client, onBound }: { run: Run, busy: boolean, client: ReOriginClient, onBound: (name: string) => void }) {
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
+  const [persona, setPersona] = useState<PersonaStyle>('calm')
   const submit = (event: FormEvent) => {
     event.preventDefault()
     void run(async () => {
-      await client.execute('BindHost', { displayName: name, goals: goal.trim() ? [goal] : [] })
+      await client.execute('BindHost', { displayName: name, goals: goal.trim() ? [goal] : [], persona })
       onBound(name.trim())
     }, '宿主绑定完成。系统将与你一同成长。')
   }
@@ -104,6 +105,15 @@ function BindForm({ run, busy, client, onBound }: { run: Run, busy: boolean, cli
       <p className="ro-section-title">宿主绑定</p>
       <label>宿主称呼<input className="ro-input" value={name} onChange={e => setName(e.target.value)} maxLength={40} required /></label>
       <label>当前主线目标（可选）<input className="ro-input" value={goal} onChange={e => setGoal(e.target.value)} maxLength={200} placeholder="例如：成为能独立交付的工程师" /></label>
+      <fieldset className="ro-persona">
+        <legend>系统人格（只改变对话语气，之后可在系统设置中更换）</legend>
+        {Object.entries(PERSONA_STYLE_INFO).map(([style, info]) => (
+          <label key={style} className="ro-inline">
+            <input type="radio" name="persona" value={style} checked={persona === style} onChange={() => setPersona(style as PersonaStyle)} />
+            <span><span className="ro-strong">{info.name}</span> <span className="ro-muted">{info.description}</span></span>
+          </label>
+        ))}
+      </fieldset>
       <div><button className="ro-btn" data-primary type="submit" disabled={busy || name.trim() === ''}>绑定宿主</button></div>
     </form>
   )
@@ -111,7 +121,7 @@ function BindForm({ run, busy, client, onBound }: { run: Run, busy: boolean, cli
 
 function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
   const { host, progress, quests } = dashboard
-  const active = quests.filter(quest => !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(quest.status) || (quest.status === 'COMPLETED' && !quest.settled))
+  const active = quests.filter(quest => !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(quest.status) || (quest.status === 'COMPLETED' && !quest.settled && quest.retraction === null))
   const closed = quests.filter(quest => !active.includes(quest))
   return (
     <>
@@ -120,6 +130,7 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
           <div className="ro-row">
             <span className="ro-level">Lv.{progress.level}</span>
             <span className="ro-muted ro-mono">XP {progress.xp}</span>
+            {dashboard.title !== null && <span className="ro-badge" data-tone="accent" data-testid="reorigin-title">「{dashboard.title.name}」</span>}
           </div>
           <span className="ro-muted">{host!.goals.length > 0 ? `主线目标：${host!.goals.join('；')}` : '尚未设定主线目标'}</span>
         </div>
@@ -141,7 +152,9 @@ function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
       {active.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} {...ctx} />)}
 
       <Growth dashboard={dashboard} />
+      <Achievements dashboard={dashboard} {...ctx} />
       <Memories dashboard={dashboard} {...ctx} />
+      <Audit dashboard={dashboard} />
 
       {closed.length > 0 && <p className="ro-section-title">历史（{closed.length}）</p>}
       {closed.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} {...ctx} />)}
@@ -200,7 +213,7 @@ function NewQuestForm({ run, busy, client, hostId }: Ctx) {
 
 function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[] } & Ctx) {
   const status = STATUS[quest.status]
-  const act = (type: 'AcceptQuest' | 'CancelQuest' | 'VerifyQuest' | 'SettleQuest', message: string) =>
+  const act = (type: 'AcceptQuest' | 'CancelQuest' | 'PauseQuest' | 'ResumeQuest' | 'VerifyQuest' | 'SettleQuest', message: string) =>
     () => void run(() => client.execute(type, { questId: quest.id }, hostId), message)
   const canSubmit = ['ACCEPTED', 'IN_PROGRESS', 'NEEDS_EVIDENCE'].includes(quest.status)
   const verification = quest.lastVerification
@@ -212,10 +225,18 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
     </>
   } else if (quest.status === 'SUBMITTED') {
     actions = <button className="ro-btn" data-primary disabled={busy} onClick={act('VerifyQuest', '核验完成。')}>开始核验</button>
-  } else if (quest.status === 'COMPLETED' && !quest.settled) {
+  } else if (quest.status === 'COMPLETED' && !quest.settled && quest.retraction === null) {
     actions = <button className="ro-btn" data-primary disabled={busy} onClick={act('SettleQuest', `结算完成：+${quest.reward.xp} XP`)}>领取奖励 +{quest.reward.xp} XP</button>
   } else if (quest.status === 'ACCEPTED' || quest.status === 'IN_PROGRESS') {
-    actions = <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
+    actions = <>
+      <button className="ro-btn" disabled={busy} onClick={act('PauseQuest', '任务已暂停，期限在暂停期间不计时。')}>暂停</button>
+      <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
+    </>
+  } else if (quest.status === 'PAUSED') {
+    actions = <>
+      <button className="ro-btn" data-primary disabled={busy} onClick={act('ResumeQuest', '任务已恢复，期限顺延。')}>继续任务</button>
+      <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
+    </>
   }
   const open = !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(quest.status)
   return (
@@ -226,7 +247,7 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
           <span className="ro-quest-title">【{QUEST_TYPE[quest.type]}任务：{quest.title}】</span>
           {quest.skill !== '' && <span className="ro-badge" data-tone="muted">{quest.skill}</span>}
         </div>
-        <span className="ro-muted ro-mono">{quest.settled ? `已结算 +${quest.reward.xp} XP` : `奖励 ${quest.reward.xp} XP`}</span>
+        <span className="ro-muted ro-mono">{quest.retraction !== null ? '不计入成长' : quest.settled ? `已结算 +${quest.reward.xp} XP` : `奖励 ${quest.reward.xp} XP`}</span>
       </div>
       {quest.objective !== '' && <p style={{ margin: '8px 0 0' }}>{quest.objective}</p>}
       {quest.source !== 'host' && (
@@ -241,7 +262,7 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
       </ul>
       <p className="ro-muted" style={{ margin: '6px 0 0' }}>
         来源：{SOURCE[quest.source]} · 已提交证据 {quest.evidenceIds.length} 份
-        {quest.expiresAt !== null && open && ` · 期限：${relativeTime(quest.expiresAt)}`}
+        {quest.expiresAt !== null && open && (quest.status === 'PAUSED' ? ' · 期限已冻结，恢复后顺延' : ` · 期限：${relativeTime(quest.expiresAt)}`)}
       </p>
       {verification !== null && verification.verdict !== 'pass' && (
         <div style={{ marginTop: 8 }}>
@@ -249,9 +270,38 @@ function QuestCard({ quest, commits, run, busy, client, hostId }: { quest: Quest
           <ul className="ro-list">{verification.reasons.map((reason, index) => <li key={index}>{describeReason(reason)}</li>)}</ul>
         </div>
       )}
+      {quest.retraction !== null && (
+        <p className="ro-proposal">
+          <span className="ro-badge" data-tone="err">已撤回</span>
+          {quest.retraction.reason}{quest.retraction.xpReversed > 0 ? ` · 已扣回 ${quest.retraction.xpReversed} XP` : ''} · {relativeTime(quest.retraction.correctedAt)}
+        </p>
+      )}
+      {quest.status === 'COMPLETED' && quest.retraction === null && <RetractForm quest={quest} run={run} busy={busy} client={client} hostId={hostId} />}
       {canSubmit && <EvidenceForm quest={quest} commits={commits} run={run} busy={busy} client={client} hostId={hostId} />}
       {actions !== null && <div className="ro-row" style={{ marginTop: 12 }}>{actions}</div>}
     </div>
+  )
+}
+
+/** Taking a completion back is the Host's correction; it compensates rather than rewrites (docs/05). */
+function RetractForm({ quest, run, busy, client, hostId }: { quest: QuestView } & Ctx) {
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  if (!open) return <div style={{ marginTop: 8 }}><button className="ro-link" style={{ marginLeft: 0 }} onClick={() => setOpen(true)}>这次完成不该算？撤回</button></div>
+  return (
+    <form className="ro-form" style={{ marginTop: 10 }} onSubmit={event => {
+      event.preventDefault()
+      void run(() => client.execute('RetractCompletion', { questId: quest.id, reason }, hostId), quest.settled ? `已撤回，扣回 ${quest.reward.xp} XP。` : '已撤回。')
+    }}>
+      <p className="ro-muted" style={{ margin: 0 }}>
+        撤回不会改写历史：任务和核验记录保留，另记一条纠错{quest.settled ? `，并在账本中追加一笔 -${quest.reward.xp} XP 的补偿` : '，之后不能再领取奖励'}。该任务不再计入技能评估与成就，相关里程碑记忆会被忘记。撤回无法取消。
+      </p>
+      <label>理由<input className="ro-input" value={reason} onChange={e => setReason(e.target.value)} maxLength={300} placeholder="例如：提交的证据其实是同事的提交" /></label>
+      <div className="ro-row">
+        <button className="ro-btn ro-danger" type="submit" disabled={busy || reason.trim().length < 2}>确认撤回</button>
+        <button className="ro-btn" type="button" onClick={() => setOpen(false)}>取消</button>
+      </div>
+    </form>
   )
 }
 

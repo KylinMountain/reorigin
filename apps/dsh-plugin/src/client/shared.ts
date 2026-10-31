@@ -7,6 +7,7 @@ export const STATUS: Record<QuestStatus, { label: string, tone: string }> = {
   AVAILABLE: { label: '可接取', tone: 'accent' },
   ACCEPTED: { label: '已接受', tone: 'warn' },
   IN_PROGRESS: { label: '进行中', tone: 'warn' },
+  PAUSED: { label: '已暂停', tone: 'muted' },
   SUBMITTED: { label: '已提交', tone: 'warn' },
   VERIFYING: { label: '核验中', tone: 'warn' },
   NEEDS_EVIDENCE: { label: '需补证', tone: 'err' },
@@ -30,6 +31,39 @@ export function describeReason(reason: VerificationReason | string): string {
     case 'unattested': return '有证据既没有来自已授权数据源的佐证，也没有勾选「我确认属实」'
     case 'criterion_unmet': return `「${reason.description}」：已有 ${reason.count} / 需要 ${reason.required}`
   }
+}
+
+/** Audit event types in the Host's words. */
+export const EVENT_LABEL: Record<string, string> = {
+  'host.bound.v1': '绑定宿主',
+  'quest.proposed.v1': '提出任务',
+  'quest.transitioned.v1': '任务状态变化',
+  'quest.accepted.v1': '接受任务',
+  'quest.paused.v1': '暂停任务',
+  'quest.resumed.v1': '恢复任务',
+  'quest.evidence_submitted.v1': '提交证据',
+  'quest.verified.v1': '核验',
+  'quest.completed.v1': '任务完成',
+  'reward.granted.v1': 'XP 入账',
+  'consent.granted.v1': '授权数据源',
+  'consent.revoked.v1': '撤销授权',
+  'world.event_observed.v1': '采集数据源',
+  'preferences.updated.v1': '更新系统设置',
+  'memory.added.v1': '添加记忆',
+  'memory.forgotten.v1': '忘记记忆',
+  'system.nudged.v1': '系统提醒',
+  'skill.assessed.v1': '技能评估',
+  'achievement.unlocked.v1': '解锁成就',
+  'host.title_equipped.v1': '佩戴称号',
+  'quest.retracted.v1': '撤回完成',
+  'reward.reversed.v1': 'XP 补偿扣回',
+}
+
+/** Who caused an audit event, read from its causation id. */
+export function eventActor(causationId: string): string {
+  if (causationId.startsWith('system:')) return '系统'
+  if (causationId.startsWith('agent:')) return 'Agent'
+  return '宿主'
 }
 
 export function relativeTime(iso: string, now = Date.now()): string {

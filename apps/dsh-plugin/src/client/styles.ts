@@ -63,6 +63,9 @@ export const STYLES = `
 .ro-link { font: inherit; font-size: 12px; background: none; border: none; color: var(--ro-fg-3); cursor: pointer; margin-left: 8px; padding: 0; text-decoration: underline; }
 .ro-track { display: grid; grid-template-columns: minmax(80px, 140px) 1fr auto; gap: 10px; align-items: center; margin-top: 6px; }
 .ro-track-name { font-size: 13px; }
+.ro-skill { padding: 4px 0 8px; border-bottom: 1px solid var(--ro-border); }
+.ro-skill:last-child { border-bottom: none; }
+.ro-skill-basis { margin: 6px 0 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .ro-consent { padding: 6px 0; border-bottom: 1px solid var(--ro-border); }
 .ro-card[data-hidden="true"] { border-style: dashed; }
 .ro-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0,0,0,.72); animation: ro-fade .3s ease; cursor: pointer; }
@@ -83,4 +86,9 @@ export const STYLES = `
 }
 @media (prefers-reduced-motion: reduce) { .ro-overlay, .ro-line, .ro-level-big, .ro-bar > span { animation: none; transition: none; } }
 .ro-toast { border-color: var(--ro-ok); }
+.ro-btn.ro-danger { border-color: var(--ro-err); color: var(--ro-err); }
+.ro-persona { border: 1px solid var(--ro-border); border-radius: var(--ro-radius); padding: 8px 12px 10px; display: grid; gap: 6px; margin: 0; }
+.ro-persona legend { font-size: 12px; color: var(--ro-fg-2); padding: 0 4px; }
+.ro-feed li[data-inactive="true"] .ro-strong { color: var(--ro-fg-3); text-decoration: line-through; }
+.ro-audit { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 `

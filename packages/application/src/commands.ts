@@ -1,4 +1,4 @@
-import { EVIDENCE_KINDS, MAX_DISPLAY_NAME, MAX_GOALS, MAX_XP_PER_QUEST, QUEST_TYPES } from '@reorigin/domain'
+import { EVIDENCE_KINDS, MAX_DISPLAY_NAME, MAX_GOALS, MAX_XP_PER_QUEST, PERSONA_STYLES, QUEST_TYPES } from '@reorigin/domain'
 import { z } from 'zod'
 
 /**
@@ -38,6 +38,7 @@ export const commandSchema = z.discriminatedUnion('type', [
     payload: z.object({
       displayName: z.string().min(1).max(MAX_DISPLAY_NAME),
       goals: z.array(z.string().max(200)).max(MAX_GOALS).default([]),
+      persona: z.enum(PERSONA_STYLES).optional(),
     }),
   }),
   z.object({
@@ -58,6 +59,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...envelope, type: z.literal('AcceptQuest'), hostId: id, payload: z.object({ questId: id }) }),
   z.object({ ...envelope, type: z.literal('CancelQuest'), hostId: id, payload: z.object({ questId: id }) }),
+  z.object({ ...envelope, type: z.literal('PauseQuest'), hostId: id, payload: z.object({ questId: id }) }),
+  z.object({ ...envelope, type: z.literal('ResumeQuest'), hostId: id, payload: z.object({ questId: id }) }),
   z.object({
     ...envelope,
     type: z.literal('SubmitQuestEvidence'),
@@ -66,6 +69,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   }),
   z.object({ ...envelope, type: z.literal('VerifyQuest'), hostId: id, payload: z.object({ questId: id }) }),
   z.object({ ...envelope, type: z.literal('SettleQuest'), hostId: id, payload: z.object({ questId: id }) }),
+  /** The Host takes back a completion that should not have counted; history stays, a compensation follows. */
+  z.object({ ...envelope, type: z.literal('RetractCompletion'), hostId: id, payload: z.object({ questId: id, reason: z.string().trim().min(2).max(300) }) }),
   z.object({
     ...envelope,
     type: z.literal('GrantConsent'),
@@ -89,11 +94,17 @@ export const commandSchema = z.discriminatedUnion('type', [
     payload: z.object({
       quietHours: z.object({ start: z.int().min(0).max(23), end: z.int().min(0).max(23) }).nullable(),
       systemProposalsPerDay: z.int().min(0).max(3),
+      /** Omitted keeps the current persona. */
+      persona: z.enum(PERSONA_STYLES).optional(),
     }),
   }),
   z.object({ ...envelope, type: z.literal('AddMemory'), hostId: id, payload: z.object({ text: z.string().min(1).max(300) }) }),
   z.object({ ...envelope, type: z.literal('ForgetMemory'), hostId: id, payload: z.object({ memoryId: id }) }),
   z.object({ ...envelope, type: z.literal('MarkNoticesRead'), hostId: id, payload: z.object({}) }),
+  /** Erase every record the System holds. The Host retypes their display name to confirm. */
+  z.object({ ...envelope, type: z.literal('DeleteHost'), hostId: id, payload: z.object({ confirmName: z.string().min(1).max(MAX_DISPLAY_NAME) }) }),
+  /** Display an unlocked title, or none with null. */
+  z.object({ ...envelope, type: z.literal('EquipTitle'), hostId: id, payload: z.object({ titleKey: z.string().min(1).max(80).nullable() }) }),
 ])
 
 export type Command = z.infer<typeof commandSchema>
@@ -113,9 +124,12 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   ProposeQuest: ['host', 'agent', 'system'],
   AcceptQuest: ['host'],
   CancelQuest: ['host'],
+  PauseQuest: ['host'],
+  ResumeQuest: ['host'],
   SubmitQuestEvidence: ['host'],
   VerifyQuest: ['host', 'system'],
   SettleQuest: ['host', 'system'],
+  RetractCompletion: ['host'],
   // What the System may observe and remember is the Host's call alone.
   GrantConsent: ['host'],
   RevokeConsent: ['host'],
@@ -123,4 +137,6 @@ export const ALLOWED_ACTORS: Readonly<Record<CommandType, readonly Actor[]>> = {
   AddMemory: ['host'],
   ForgetMemory: ['host'],
   MarkNoticesRead: ['host'],
+  EquipTitle: ['host'],
+  DeleteHost: ['host'],
 }

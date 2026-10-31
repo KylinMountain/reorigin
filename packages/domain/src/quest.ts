@@ -8,15 +8,20 @@ export type QuestType = (typeof QUEST_TYPES)[number]
 export type QuestSource = 'host' | 'agent' | 'system'
 
 export type QuestStatus =
-  | 'PROPOSED' | 'AVAILABLE' | 'ACCEPTED' | 'IN_PROGRESS' | 'SUBMITTED' | 'VERIFYING'
+  | 'PROPOSED' | 'AVAILABLE' | 'ACCEPTED' | 'IN_PROGRESS' | 'PAUSED' | 'SUBMITTED' | 'VERIFYING'
   | 'NEEDS_EVIDENCE' | 'COMPLETED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED'
 
-/** The state machine from docs/05-domain-model.md. PROPOSED → CANCELLED is the Host declining a proposal. */
+/**
+ * The state machine from docs/05-domain-model.md. PROPOSED → CANCELLED is the
+ * Host declining a proposal; PAUSED is the Host setting a quest aside, and it
+ * resumes as IN_PROGRESS.
+ */
 const TRANSITIONS: Readonly<Record<QuestStatus, readonly QuestStatus[]>> = {
   PROPOSED: ['AVAILABLE', 'CANCELLED'],
   AVAILABLE: ['ACCEPTED', 'CANCELLED', 'EXPIRED'],
-  ACCEPTED: ['IN_PROGRESS', 'CANCELLED', 'EXPIRED'],
-  IN_PROGRESS: ['SUBMITTED', 'CANCELLED', 'EXPIRED'],
+  ACCEPTED: ['IN_PROGRESS', 'PAUSED', 'CANCELLED', 'EXPIRED'],
+  IN_PROGRESS: ['SUBMITTED', 'PAUSED', 'CANCELLED', 'EXPIRED'],
+  PAUSED: ['IN_PROGRESS', 'CANCELLED'],
   SUBMITTED: ['VERIFYING'],
   VERIFYING: ['COMPLETED', 'NEEDS_EVIDENCE', 'REJECTED'],
   NEEDS_EVIDENCE: ['SUBMITTED'],
@@ -63,6 +68,8 @@ export interface Quest {
   readonly evidenceIds: readonly string[]
   /** After this instant an unstarted or in-progress quest expires; null means open-ended. */
   readonly expiresAt: string | null
+  /** When the Host paused the quest; the deadline does not run while paused. */
+  readonly pausedAt: string | null
   /** Free-form growth track tag (e.g. "测试工程"); aggregates completions, never claims proficiency. */
   readonly skill: string
   /** Dedupe key for System-generated quests; the same opportunity is proposed at most once. */
@@ -71,7 +78,7 @@ export interface Quest {
 
 /**
  * Where an expired deadline leads. Quests the Host already submitted evidence
- * for (SUBMITTED, VERIFYING, NEEDS_EVIDENCE) are never failed by the clock.
+ * for (SUBMITTED, VERIFYING, NEEDS_EVIDENCE) or paused are never failed by the clock.
  */
 export function expiryTarget(quest: Quest, now: string): QuestStatus | null {
   if (quest.expiresAt === null || Date.parse(quest.expiresAt) > Date.parse(now)) return null
@@ -138,6 +145,7 @@ export function proposeQuest(input: {
     closedAt: null,
     evidenceIds: [],
     expiresAt: input.expiresAt ?? null,
+    pausedAt: null,
     skill: (input.skill ?? '').trim(),
     sourceKey: input.sourceKey ?? null,
   }
@@ -151,12 +159,16 @@ export function transition(quest: Quest, to: QuestStatus, at: string): { quest: 
   if (!TRANSITIONS[quest.status].includes(to)) {
     throw new DomainError('quest/illegal-transition', `quest ${quest.id} cannot move ${quest.status} → ${to}`)
   }
+  // Leaving a pause pushes the deadline back by however long the quest sat paused.
+  const pausedFor = quest.status === 'PAUSED' && quest.pausedAt !== null ? Math.max(0, Date.parse(at) - Date.parse(quest.pausedAt)) : 0
   const next: Quest = {
     ...quest,
     status: to,
     revision: quest.revision + 1,
     acceptedAt: to === 'ACCEPTED' ? at : quest.acceptedAt,
     closedAt: isTerminal(to) ? at : quest.closedAt,
+    pausedAt: to === 'PAUSED' ? at : null,
+    expiresAt: quest.expiresAt === null || pausedFor === 0 ? quest.expiresAt : new Date(Date.parse(quest.expiresAt) + pausedFor).toISOString(),
   }
   return { quest: next, transition: { questId: quest.id, from: quest.status, to, at } }
 }

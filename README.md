@@ -31,7 +31,7 @@ Run it inside DSH (pinned at `ce7073d`, checked out at `../deepseek-harness`):
 ```sh
 cd ../deepseek-harness
 pnpm dsh --profile reorigin --from-default-profile web --dump-config > /dev/null
-pnpm dsh plugin --profile reorigin add "$PWD/../reorigin/apps/dsh-plugin/release/dsh-plugin-reorigin-0.1.0.tgz"
+pnpm dsh plugin --profile reorigin add "$PWD/../reorigin/apps/dsh-plugin/release/dsh-plugin-reorigin-0.1.1.tgz"
 pnpm dsh --profile reorigin
 ```
 

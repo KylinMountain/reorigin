@@ -104,6 +104,10 @@ DSH 的 `ctx.remote.<namespace>` 依赖仓库内 typert 生成器产出的 `type
 - `ctx.systemPrompt.section` 放静态人格，`ctx.systemPrompt.context` 放每步变化的事实；两者的文本回调是同步的，正好匹配同步的 `node:sqlite` 读取。用户输入会进入其中，务必 `interpolate: false`。
 - DSH 没有不调模型就能查看组装后 prompt 的入口，所以「进入会话 prompt」只能用真实对话验证。
 
+### 兼容范围
+
+`engines.dsh` 为 `>=0.2.1-rc.5 <0.3.0`（DSH 以 `includePrerelease` 校验）。0.2.1-rc.5 是当前桌面正式通道版本；对照 `dsh-v0.2.1-rc.5` 与验证用的 `ce7073d`，插件依赖的平台共享模块表、client 加载格式、Gateway SRC 回退、typert 方法描述符、`selectPanel`、`systemPrompt.context` 均一致（差异只在注释与无关的资源解析参数）。运行验证仍是在 `ce7073d` 上完成的。
+
 ### 仍待验证
 
 - 分发：已选定 tarball（`pnpm run pack`，见 07 · 分发），在全新 profile 上安装验证；npm 发布与 `engines.dsh` 范围策略待公开发布时决定。

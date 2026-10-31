@@ -71,7 +71,7 @@ writeFileSync(join(DIST, 'package.json'), `${JSON.stringify({
   exports: { '.': './host.js', './client': './client.js', './package.json': './package.json' },
   files: ['host.js', 'client.js', 'cordis.patch.yml'],
   peerDependencies: { '@deepseek-ai/cordis': '*', '@deepseek-ai/dsh-tools': '*', '@deepseek-ai/dsh-typert-protocol': '*' },
-  engines: { dsh: '>=0.2.2-alpha.0 <0.3.0' },
+  engines: { dsh: '>=0.2.1-rc.5 <0.3.0' },
   dsh: {
     bundle: { patch: './cordis.patch.yml' },
     client: {

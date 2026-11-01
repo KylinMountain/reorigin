@@ -102,9 +102,11 @@ export interface Preferences {
   readonly persona: PersonaStyle
   /** IANA zone for quiet hours and daily caps; null follows the Host machine's clock. */
   readonly timeZone: string | null
+  /** Whether activity from consented sources is attached to open quests without the Host submitting it. */
+  readonly autoEvidence: boolean
 }
 
-export const DEFAULT_PREFERENCES: Preferences = { quietHours: { start: 23, end: 8 }, systemProposalsPerDay: 1, persona: 'calm', timeZone: null }
+export const DEFAULT_PREFERENCES: Preferences = { quietHours: { start: 23, end: 8 }, systemProposalsPerDay: 1, persona: 'calm', timeZone: null, autoEvidence: true }
 
 /** Whether the runtime knows this IANA time zone. */
 export function isTimeZone(zone: string): boolean {

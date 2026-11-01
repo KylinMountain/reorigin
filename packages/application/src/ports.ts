@@ -4,7 +4,7 @@ import type { Achievement, Consent, Correction, Evidence, Host, LedgerEntry, Pre
 export interface Notice {
   readonly id: string
   readonly hostId: string
-  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement' | 'correction' | 'review'
+  readonly kind: 'level_up' | 'reward' | 'proposal' | 'expired' | 'nudge' | 'skill' | 'achievement' | 'correction' | 'review' | 'tracked'
   readonly title: string
   readonly body: string
   readonly createdAt: string
@@ -92,6 +92,8 @@ export interface Transaction {
 
   insertEvidence(evidence: Evidence): void
   getEvidence(evidenceIds: readonly string[]): Evidence[]
+  /** World events some evidence already cites as its corroboration. */
+  corroboratedEventIds(hostId: string): Set<string>
   /** Content hashes that passed verification for any quest of `hostId` other than `exceptQuestId`. */
   countedEvidenceHashes(hostId: string, exceptQuestId: string): Set<string>
 

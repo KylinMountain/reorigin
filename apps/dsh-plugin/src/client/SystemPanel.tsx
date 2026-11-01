@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { Dashboard, QuestView } from '@reorigin/application'
 import { PERSONA_STYLE_INFO, type EvidenceKind, type PersonaStyle, type QuestType, type WorldEvent, type Consent } from '@reorigin/domain'
-import { RemoteFailure, type AgentStatus, type ReOriginClient } from './api.ts'
-import { Achievements, Audit, Growth, Memories, Notices, Settings } from './Cards.tsx'
-import { Awakening, LevelUp } from './Overlays.tsx'
+import { RemoteFailure, type AgentStatus, type Discovery, type ReOriginClient } from './api.ts'
+import { Achievements, Audit, Growth, Memories, Settings } from './Cards.tsx'
+import { ART, Awakening, LevelUp, SystemBoot, shouldBoot } from './Overlays.tsx'
+import { Detected, Sources, openCandidates, useDiscovery } from './Sources.tsx'
 import { EVIDENCE_KIND, QUEST_TYPE, SOURCE, STATUS, describeReason, relativeTime, type Ctx, type Run } from './shared.ts'
+
+type Tab = 'today' | 'sources' | 'growth' | 'settings'
+const TABS: readonly { id: Tab, label: string }[] = [
+  { id: 'today', label: '面板' },
+  { id: 'sources', label: '数据源' },
+  { id: 'growth', label: '成长' },
+  { id: 'settings', label: '设置' },
+]
+const CLOSED = ['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED']
 
 export function SystemPanel({ client }: { client: ReOriginClient }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
@@ -14,6 +24,8 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
   const [busy, setBusy] = useState(false)
   const [awakening, setAwakening] = useState<string | null>(null)
   const [levelUp, setLevelUp] = useState<number | null>(null)
+  const [tab, setTab] = useState<Tab>('today')
+  const [booting, setBooting] = useState(shouldBoot)
   const lastLevel = useRef<number | null>(null)
 
   const reload = useCallback(async () => {
@@ -42,7 +54,7 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
 
   useEffect(() => { reload().catch(failure => setError(String(failure))) }, [reload])
 
-  // Proposals and notices arrive from conversations and the System's heartbeat; pick them up while the panel is open.
+  // Proposals, tracked evidence and notices arrive from conversations and the System's heartbeat; pick them up while the panel is open.
   useEffect(() => {
     const refresh = () => { if (document.visibilityState === 'visible') reload().catch(() => {}) }
     const timer = window.setInterval(refresh, 10_000)
@@ -57,34 +69,24 @@ export function SystemPanel({ client }: { client: ReOriginClient }) {
   const ctx: Ctx | null = host === null ? null : { run, busy, client, hostId: host.id }
   const closeAwakening = useCallback(() => setAwakening(null), [])
   const closeLevelUp = useCallback(() => setLevelUp(null), [])
+  const closeBoot = useCallback(() => setBooting(false), [])
 
   return (
-    <div className="ro-root" data-testid="reorigin-panel">
+    <div className="ro-shell">
+    {booting && <SystemBoot ready={dashboard !== null} name={host?.displayName ?? null} onDone={closeBoot} />}
+    <div className="ro-root" data-testid="reorigin-panel" data-bound={host !== null}>
       {awakening !== null && <Awakening name={awakening} onDone={closeAwakening} />}
       {levelUp !== null && dashboard !== null && <LevelUp level={levelUp} chapter={dashboard.chapter} onDone={closeLevelUp} />}
       <div className="ro-wrap">
-        <div>
-          <div className="ro-kicker">Re:Origin · System Terminal{host !== null && dashboard !== null ? ` · 第 ${dashboard.chapter.index} 章「${dashboard.chapter.title}」` : ''}</div>
-          <h1 className="ro-title">{host !== null ? '【系统运行中】' : '【系统已觉醒】'}</h1>
-          <p className="ro-sub">{host !== null && dashboard !== null
-            ? dashboard.chapter.epigraph
-            : '检测到符合条件的宿主。人生没有读档键，但可以从这一刻重新开始。'}</p>
-        </div>
-        {error !== null && <div className="ro-card ro-error" role="alert">{error}</div>}
-        {notice !== null && <div className="ro-card ro-toast" role="status">{notice}</div>}
+        {error !== null && <div className="ro-flash" data-tone="err" role="alert">{error}</div>}
+        {notice !== null && <div className="ro-flash" role="status">{notice}</div>}
         {dashboard === null
-          ? <div className="ro-muted">连接系统核心…</div>
+          ? <div className="ro-boot">正在连接系统核心</div>
           : ctx === null
-            ? <BindForm run={run} busy={busy} client={client} onBound={setAwakening} />
-            : <HostView dashboard={dashboard} {...ctx} />}
-        {agent !== null && (
-          <p className="ro-muted" data-testid="reorigin-agent-status">
-            {agent.connected && agent.toolRegistered
-              ? `Agent 集成：已连接。在 DSH 会话中谈及你的目标时，Agent 可通过 ${agent.toolName} 向这里提议任务。`
-              : 'Agent 集成：未连接（当前 DSH 组合没有提供工具或提示词服务）。'}
-          </p>
-        )}
+            ? <BindForm run={run} busy={busy} client={client} onBound={name => { setTab('today'); setAwakening(name) }} />
+            : <HostView dashboard={dashboard} agent={agent} tab={tab} onTab={setTab} {...ctx} />}
       </div>
+    </div>
     </div>
   )
 }
@@ -101,8 +103,11 @@ function BindForm({ run, busy, client, onBound }: { run: Run, busy: boolean, cli
     }, '宿主绑定完成。系统将与你一同成长。')
   }
   return (
-    <form className="ro-card ro-form" onSubmit={submit}>
-      <p className="ro-section-title">宿主绑定</p>
+    <form className="ro-card ro-form ro-bind" onSubmit={submit}>
+      <img className="ro-bind-emblem" src={ART.emblem} alt="" />
+      <p className="ro-sys">【系统已觉醒】</p>
+      <h1 className="ro-bind-title">检测到符合条件的宿主</h1>
+      <p className="ro-note">人生没有读档键，但可以从这一刻重新开始。绑定后，系统会侦测你在 DSH 里常用的仓库，授权之后你的提交会自动变成任务进度。</p>
       <label>宿主称呼<input className="ro-input" value={name} onChange={e => setName(e.target.value)} maxLength={40} required /></label>
       <label>当前主线目标（可选）<input className="ro-input" value={goal} onChange={e => setGoal(e.target.value)} maxLength={200} placeholder="例如：成为能独立交付的工程师" /></label>
       <fieldset className="ro-persona">
@@ -133,51 +138,201 @@ function BindForm({ run, busy, client, onBound }: { run: Run, busy: boolean, cli
   )
 }
 
-function HostView({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
-  const { host, progress, quests } = dashboard
-  const active = quests.filter(quest => !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(quest.status) || (quest.status === 'COMPLETED' && !quest.settled && quest.retraction === null))
-  const closed = quests.filter(quest => !active.includes(quest))
+function HostView({ dashboard, agent, tab, onTab, ...ctx }: { dashboard: Dashboard, agent: AgentStatus | null, tab: Tab, onTab: (tab: Tab) => void } & Ctx) {
+  const [discovery, refreshDiscovery] = useDiscovery(ctx.client)
+  const detected = openCandidates(discovery).length
   return (
     <>
-      <div className="ro-card">
-        <div className="ro-row ro-spread">
-          <div className="ro-row">
-            <span className="ro-level">Lv.{progress.level}</span>
-            <span className="ro-muted ro-mono">XP {progress.xp}</span>
-            {dashboard.title !== null && <span className="ro-badge" data-tone="accent" data-testid="reorigin-title">「{dashboard.title.name}」</span>}
-          </div>
-          <span className="ro-muted">{host!.goals.length > 0 ? `主线目标：${host!.goals.join('；')}` : '尚未设定主线目标'}</span>
-        </div>
-        <div className="ro-row" style={{ marginTop: 10 }}>
-          <div className="ro-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.levelSpan} aria-valuenow={progress.intoLevel}>
-            <span style={{ width: `${Math.min(100, (progress.intoLevel / progress.levelSpan) * 100)}%` }} />
-          </div>
-          <span className="ro-muted ro-mono">{progress.intoLevel}/{progress.levelSpan}</span>
-        </div>
-        <p className="ro-muted" style={{ margin: '8px 0 0' }}>XP 只代表系统内的成长反馈，不等于现实能力评估。</p>
-      </div>
-
-      <Notices dashboard={dashboard} {...ctx} />
-      <Settings dashboard={dashboard} {...ctx} />
-      <NewQuestForm {...ctx} />
-
-      <p className="ro-section-title">进行中的任务（{active.length}）</p>
-      {active.length === 0 && <div className="ro-muted">暂无任务。发布一条与你主线目标相关的现实任务吧。</div>}
-      {active.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} consents={dashboard.consents} {...ctx} />)}
-
-      <Growth dashboard={dashboard} />
-      <Achievements dashboard={dashboard} {...ctx} />
-      <Memories dashboard={dashboard} {...ctx} />
-      <Audit dashboard={dashboard} />
-
-      {closed.length > 0 && <p className="ro-section-title">历史（{closed.length}）</p>}
-      {closed.map(quest => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} consents={dashboard.consents} {...ctx} />)}
+      <StatusWindow dashboard={dashboard} />
+      <nav className="ro-tabs" role="tablist">
+        {TABS.map(item => (
+          <button key={item.id} role="tab" aria-selected={tab === item.id} className="ro-tab" onClick={() => onTab(item.id)}>
+            {item.label}
+            {item.id === 'sources' && detected > 0 && <span className="ro-pip" aria-label={`${detected} 个待授权`}>{detected}</span>}
+            {item.id === 'today' && dashboard.unreadNotices > 0 && <span className="ro-pip">{dashboard.unreadNotices}</span>}
+          </button>
+        ))}
+      </nav>
+      {tab === 'today' && <Today dashboard={dashboard} discovery={discovery} onGranted={refreshDiscovery} {...ctx} />}
+      {tab === 'sources' && <Sources dashboard={dashboard} discovery={discovery} onGranted={refreshDiscovery} {...ctx} />}
+      {tab === 'growth' && (
+        <>
+          <Growth dashboard={dashboard} />
+          {dashboard.growth.length === 0 && <section className="ro-card"><p className="ro-dim">完成第一个带成长标签的任务后，这里会出现技能评估。</p></section>}
+          <Achievements dashboard={dashboard} {...ctx} />
+          <Memories dashboard={dashboard} {...ctx} />
+        </>
+      )}
+      {tab === 'settings' && (
+        <>
+          <Settings dashboard={dashboard} {...ctx} />
+          <Audit dashboard={dashboard} />
+          {agent !== null && (
+            <p className="ro-dim" data-testid="reorigin-agent-status">
+              {agent.connected && agent.toolRegistered
+                ? `Agent 集成：已连接。在 DSH 会话中谈及你的目标时，Agent 可通过 ${agent.toolName} 向这里提议任务。`
+                : 'Agent 集成：未连接（当前 DSH 组合没有提供工具或提示词服务）。'}
+            </p>
+          )}
+        </>
+      )}
     </>
   )
 }
 
-function NewQuestForm({ run, busy, client, hostId }: Ctx) {
-  const [open, setOpen] = useState(false)
+/** The hero: who the Host is in the System right now, and what it saw today. */
+function StatusWindow({ dashboard }: { dashboard: Dashboard }) {
+  const { host, progress, chapter, quests } = dashboard
+  const today = new Date().toDateString()
+  const observedToday = dashboard.recentCommits.filter(event => new Date(event.observedAt).toDateString() === today).length
+  const running = quests.filter(quest => ['ACCEPTED', 'IN_PROGRESS', 'SUBMITTED', 'NEEDS_EVIDENCE', 'PAUSED'].includes(quest.status)).length
+  const claimable = quests.filter(quest => quest.status === 'COMPLETED' && !quest.settled && quest.retraction === null).length
+  const percent = Math.min(100, (progress.intoLevel / progress.levelSpan) * 100)
+  return (
+    <header className="ro-status" data-testid="reorigin-status">
+      <img className="ro-status-emblem" src={ART.emblem} alt="" />
+      <div className="ro-status-id">
+        <p className="ro-sys">【状态】第 {chapter.index} 章「{chapter.title}」</p>
+        <h1 className="ro-name">{host!.displayName}</h1>
+        {dashboard.title !== null && <p className="ro-title-worn" data-testid="reorigin-title">称号「{dashboard.title.name}」</p>}
+        <p className="ro-epigraph">{chapter.epigraph}</p>
+      </div>
+      <div className="ro-status-level" aria-label={`等级 ${progress.level}`}>
+        <span className="ro-lv">Lv</span>
+        <span className="ro-level">{progress.level}</span>
+      </div>
+      <div className="ro-xp">
+        <div className="ro-xp-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.levelSpan} aria-valuenow={progress.intoLevel}>
+          <span style={{ width: `${percent}%` }} />
+        </div>
+        <span className="ro-xp-num">{progress.intoLevel} / {progress.levelSpan} XP</span>
+      </div>
+      <dl className="ro-stats">
+        <div><dt>今日观测</dt><dd>{observedToday}</dd></div>
+        <div><dt>进行中</dt><dd>{running}</dd></div>
+        <div data-hot={claimable > 0}><dt>待领取</dt><dd>{claimable}</dd></div>
+        <div><dt>数据源</dt><dd>{dashboard.consents.filter(consent => consent.status === 'active').length}</dd></div>
+      </dl>
+    </header>
+  )
+}
+
+function Today({ dashboard, discovery, onGranted, ...ctx }: { dashboard: Dashboard, discovery: Discovery | null, onGranted: () => void } & Ctx) {
+  const { quests } = dashboard
+  const [history, setHistory] = useState(false)
+  const claimable = quests.filter(quest => quest.status === 'COMPLETED' && !quest.settled && quest.retraction === null)
+  const proposed = quests.filter(quest => quest.status === 'PROPOSED' || quest.status === 'AVAILABLE')
+  const running = quests.filter(quest => !CLOSED.includes(quest.status) && !proposed.includes(quest))
+  const closed = quests.filter(quest => CLOSED.includes(quest.status) && !claimable.includes(quest))
+  const card = (quest: QuestView) => <QuestCard key={quest.id} quest={quest} commits={dashboard.recentCommits} consents={dashboard.consents} autoEvidence={dashboard.preferences?.autoEvidence ?? true} {...ctx} />
+  return (
+    <>
+      <Detected discovery={discovery} onGranted={onGranted} compact {...ctx} />
+      {claimable.length > 0 && <Group title="待领取的奖励" tone="gold">{claimable.map(card)}</Group>}
+      {proposed.length > 0 && <Group title="等你决定的任务">{proposed.map(card)}</Group>}
+      <Group title="进行中">
+        {running.length === 0 && <p className="ro-dim">没有进行中的任务。从下面挑一个开始，之后的提交会自动计入。</p>}
+        {running.map(card)}
+      </Group>
+      <QuickQuests dashboard={dashboard} {...ctx} />
+      <SystemLog dashboard={dashboard} {...ctx} />
+      {closed.length > 0 && (
+        <Group title={`历史（${closed.length}）`}>
+          {history ? closed.map(card) : <button className="ro-link" onClick={() => setHistory(true)}>展开历史任务</button>}
+        </Group>
+      )}
+    </>
+  )
+}
+
+function Group({ title, tone, children }: { title: string, tone?: string, children: ReactNode }) {
+  return (
+    <section className="ro-group" data-tone={tone}>
+      <h2 className="ro-group-title">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+/** Notices and raw observations interleaved: what the System did and saw, newest first. */
+function SystemLog({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
+  const consentName = new Map(dashboard.consents.map(consent => [consent.id, consent.scopeRef.split('/').filter(Boolean).pop() ?? consent.scopeRef]))
+  const entries = [
+    ...dashboard.notices.map(item => ({ key: item.id, at: item.createdAt, kind: 'notice' as const, title: item.title, body: item.body, unread: item.readAt === null })),
+    ...dashboard.recentCommits.map(event => ({
+      key: event.id,
+      at: event.observedAt,
+      kind: 'observed' as const,
+      title: event.source === 'github_repo' ? '【观测·PR】' : '【观测·提交】',
+      body: `${consentName.get(event.consentId) ?? ''}　${event.summary}`,
+      unread: false,
+    })),
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12)
+  return (
+    <section className="ro-card ro-log" data-testid="reorigin-log">
+      <div className="ro-row ro-spread">
+        <h2 className="ro-h">系统日志</h2>
+        {dashboard.unreadNotices > 0 && <button className="ro-btn ro-btn-quiet" disabled={ctx.busy} onClick={() => void ctx.run(() => ctx.client.execute('MarkNoticesRead', {}, ctx.hostId))}>全部已读</button>}
+      </div>
+      {entries.length === 0 && <p className="ro-dim">授权数据源后，你的提交、PR 和系统的判定都会出现在这里。</p>}
+      <ol className="ro-log-list">
+        {entries.map(entry => (
+          <li key={entry.key} data-kind={entry.kind} data-unread={entry.unread}>
+            <time dateTime={entry.at}>{relativeTime(entry.at)}</time>
+            <span className="ro-log-title">{entry.title}</span>
+            <span className="ro-log-body">{entry.body}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+interface Template {
+  readonly key: string
+  readonly label: string
+  readonly hint: string
+  readonly needs: 'git_repo' | 'github_repo'
+  readonly payload: object
+}
+
+const TEMPLATES: readonly Template[] = [
+  { key: 'daily-commit', label: '今天提交一次', hint: '日常 · 30 XP', needs: 'git_repo',
+    payload: { type: 'daily', title: '今天提交一次', objective: '在任意授权仓库里留下一次提交。', xp: 30, skill: '节奏', criteria: [{ kind: 'git_commit', minCount: 1, description: '1 次授权仓库中的提交' }] } },
+  { key: 'week-commits', label: '一周五次提交', hint: '7 天 · 120 XP', needs: 'git_repo',
+    payload: { type: 'side', title: '一周五次提交', objective: '七天内在授权仓库里累计五次提交。', xp: 120, skill: '交付', expiresInDays: 7, criteria: [{ kind: 'git_commit', minCount: 5, description: '5 次授权仓库中的提交' }] } },
+  { key: 'week-pr', label: '合并一个 PR', hint: '7 天 · 150 XP', needs: 'github_repo',
+    payload: { type: 'side', title: '合并一个 PR', objective: '七天内在授权的 GitHub 仓库里合并一个自己的 PR。', xp: 150, skill: '协作', expiresInDays: 7, criteria: [{ kind: 'link', minCount: 1, description: '1 个授权 GitHub 仓库中合并的 PR' }] } },
+]
+
+/** One click publishes and accepts; the tracker does the rest. */
+function QuickQuests({ dashboard, ...ctx }: { dashboard: Dashboard } & Ctx) {
+  const [custom, setCustom] = useState(false)
+  const sources = new Set(dashboard.consents.filter(consent => consent.status === 'active').map(consent => consent.source))
+  const start = (template: Template) => void ctx.run(async () => {
+    const outcome = await ctx.client.execute('ProposeQuest', template.payload, ctx.hostId)
+    if (outcome.type === 'ProposeQuest') await ctx.client.execute('AcceptQuest', { questId: outcome.quest.id }, ctx.hostId)
+  }, `已接受「${template.label}」。接下来的${template.needs === 'git_repo' ? '提交' : ' PR'}会自动计入。`)
+  return (
+    <section className="ro-card">
+      <h2 className="ro-h">接一个任务</h2>
+      <div className="ro-templates">
+        {TEMPLATES.map(template => {
+          const ready = sources.has(template.needs)
+          return (
+            <button key={template.key} className="ro-template" disabled={ctx.busy || !ready} onClick={() => start(template)}>
+              <span className="ro-template-label">{template.label}</span>
+              <span className="ro-dim">{ready ? template.hint : template.needs === 'git_repo' ? '先授权一个本地仓库' : '先授权一个 GitHub 仓库'}</span>
+            </button>
+          )
+        })}
+      </div>
+      {custom ? <NewQuestForm {...ctx} onClose={() => setCustom(false)} /> : <button className="ro-link" onClick={() => setCustom(true)}>自定义任务</button>}
+    </section>
+  )
+}
+
+function NewQuestForm({ run, busy, client, hostId, onClose }: Ctx & { onClose: () => void }) {
   const [title, setTitle] = useState('')
   const [objective, setObjective] = useState('')
   const [type, setType] = useState<QuestType>('side')
@@ -186,7 +341,6 @@ function NewQuestForm({ run, busy, client, hostId }: Ctx) {
   const [xp, setXp] = useState(100)
   const [skill, setSkill] = useState('')
   const [days, setDays] = useState('')
-  if (!open) return <div><button className="ro-btn" onClick={() => setOpen(true)}>＋ 发布新任务</button></div>
   const submit = (event: FormEvent) => {
     event.preventDefault()
     void run(async () => {
@@ -195,14 +349,13 @@ function NewQuestForm({ run, busy, client, hostId }: Ctx) {
         ...(days === '' ? {} : { expiresInDays: Number(days) }),
         criteria: [{ kind, minCount: count, description: `${count} 份${EVIDENCE_KIND[kind]}证据` }],
       }, hostId)
-      setOpen(false)
+      onClose()
       setTitle('')
       setObjective('')
     }, '任务已发布。')
   }
   return (
-    <form className="ro-card ro-form" onSubmit={submit}>
-      <p className="ro-section-title">发布任务</p>
+    <form className="ro-form ro-custom" onSubmit={submit}>
       <label>任务名<input className="ro-input" value={title} onChange={e => setTitle(e.target.value)} maxLength={120} required /></label>
       <label>目标说明<input className="ro-input" value={objective} onChange={e => setObjective(e.target.value)} maxLength={1000} /></label>
       <div className="ro-grid2">
@@ -219,13 +372,14 @@ function NewQuestForm({ run, busy, client, hostId }: Ctx) {
       </div>
       <div className="ro-row">
         <button className="ro-btn" data-primary type="submit" disabled={busy || title.trim() === ''}>发布</button>
-        <button className="ro-btn" type="button" onClick={() => setOpen(false)}>取消</button>
+        <button className="ro-btn" type="button" onClick={onClose}>取消</button>
       </div>
     </form>
   )
 }
 
-function QuestCard({ quest, commits, consents, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[], consents: readonly Consent[] } & Ctx) {
+function QuestCard({ quest, commits, consents, autoEvidence, run, busy, client, hostId }: { quest: QuestView, commits: readonly WorldEvent[], consents: readonly Consent[], autoEvidence: boolean } & Ctx) {
+  const [manual, setManual] = useState(false)
   const status = STATUS[quest.status]
   const act = (type: 'AcceptQuest' | 'CancelQuest' | 'PauseQuest' | 'ResumeQuest' | 'VerifyQuest' | 'SettleQuest', message: string) =>
     () => void run(() => client.execute(type, { questId: quest.id }, hostId), message)
@@ -252,17 +406,26 @@ function QuestCard({ quest, commits, consents, run, busy, client, hostId }: { qu
       <button className="ro-btn" disabled={busy} onClick={act('CancelQuest', '已放弃该任务。')}>放弃</button>
     </>
   }
-  const open = !['COMPLETED', 'REJECTED', 'CANCELLED', 'EXPIRED'].includes(quest.status)
+  const open = !CLOSED.includes(quest.status)
+  const granted = new Set(consents.filter(consent => consent.status === 'active').map(consent => consent.source))
+  // Every criterion a granted source can satisfy is filled by the tracker; manual evidence stays the Host's to submit.
+  const tracked = autoEvidence && quest.criteria.every(criterion =>
+    (criterion.kind === 'git_commit' && granted.has('git_repo')) || (criterion.kind === 'link' && granted.has('github_repo')))
+  const required = quest.criteria.reduce((sum, criterion) => sum + criterion.minCount, 0)
+  const held = Math.min(required, quest.evidenceIds.length)
   return (
-    <div className="ro-card" data-testid={`quest-${quest.status}`} data-hidden={quest.type === 'hidden'}>
-      <div className="ro-row ro-spread">
-        <div className="ro-row">
-          <span className="ro-badge" data-tone={status.tone}>{status.label}</span>
-          <span className="ro-quest-title">【{QUEST_TYPE[quest.type]}任务：{quest.title}】</span>
-          {quest.skill !== '' && <span className="ro-badge" data-tone="muted">{quest.skill}</span>}
-        </div>
-        <span className="ro-muted ro-mono">{quest.retraction !== null ? '不计入成长' : quest.settled ? `已结算 +${quest.reward.xp} XP` : `奖励 ${quest.reward.xp} XP`}</span>
+    <article className="ro-quest" data-testid={`quest-${quest.status}`} data-hidden={quest.type === 'hidden'} data-tone={status.tone}>
+      <div className="ro-quest-head">
+        <span className="ro-tag" data-tone={status.tone}>{status.label}</span>
+        <h3 className="ro-quest-title">【{QUEST_TYPE[quest.type]}】{quest.title}</h3>
+        <span className="ro-reward">{quest.retraction !== null ? '不计入成长' : quest.settled ? `已结算 +${quest.reward.xp}` : `+${quest.reward.xp} XP`}</span>
       </div>
+      {open && quest.status !== 'PROPOSED' && quest.status !== 'AVAILABLE' && (
+        <div className="ro-meter" aria-label={`证据 ${held} / ${required}`}>
+          {Array.from({ length: Math.min(required, 20) }, (_, index) => <span key={index} data-on={index < held} />)}
+          <span className="ro-meter-label">{held} / {required}{tracked ? ' · 自动追踪中' : ''}</span>
+        </div>
+      )}
       {quest.objective !== '' && <p style={{ margin: '8px 0 0' }}>{quest.objective}</p>}
       {quest.source !== 'host' && (
         <p className="ro-proposal">
@@ -274,8 +437,8 @@ function QuestCard({ quest, commits, consents, run, busy, client, hostId }: { qu
       <ul className="ro-list">
         {quest.criteria.map(criterion => <li key={criterion.description}>验收：{criterion.description}</li>)}
       </ul>
-      <p className="ro-muted" style={{ margin: '6px 0 0' }}>
-        来源：{SOURCE[quest.source]} · 已提交证据 {quest.evidenceIds.length} 份
+      <p className="ro-dim" style={{ margin: '6px 0 0' }}>
+        {quest.skill !== '' && `${quest.skill}　`}来源：{SOURCE[quest.source]}
         {quest.expiresAt !== null && open && (quest.status === 'PAUSED' ? ' · 期限已冻结，恢复后顺延' : ` · 期限：${relativeTime(quest.expiresAt)}`)}
       </p>
       {verification !== null && verification.verdict !== 'pass' && (
@@ -296,17 +459,18 @@ function QuestCard({ quest, commits, consents, run, busy, client, hostId }: { qu
           <ul className="ro-list">{quest.reviewNotes.map(note => <li key={note.id}>{note.note} <span className="ro-muted">· {relativeTime(note.createdAt)}</span></li>)}</ul>
         </div>
       )}
-      <label className="ro-inline ro-muted" style={{ marginTop: 8 }}>
+      {open && <label className="ro-check ro-dim" style={{ marginTop: 8 }}>
         <input type="checkbox" checked={quest.agentReview} disabled={busy} onChange={e => void run(
           () => client.execute('AllowAgentReview', { questId: quest.id, allow: e.target.checked }, hostId),
           e.target.checked ? '已允许 Agent 查看此任务的证据并留下附注。' : '已收回 Agent 对此任务的查看权限。',
         )} />
-        允许 Agent 查看此任务的证据并留下点评（附注只供参考，不影响核验与奖励）
-      </label>
+        允许 Agent 查看此任务的证据并留下点评（只供参考，不影响核验与奖励）
+      </label>}
       {quest.status === 'COMPLETED' && quest.retraction === null && <RetractForm quest={quest} run={run} busy={busy} client={client} hostId={hostId} />}
-      {canSubmit && <EvidenceForm quest={quest} commits={commits} consents={consents} run={run} busy={busy} client={client} hostId={hostId} />}
+      {canSubmit && tracked && !manual && <button className="ro-link" onClick={() => setManual(true)}>手动补交证据</button>}
+      {canSubmit && (!tracked || manual) && <EvidenceForm quest={quest} commits={commits} consents={consents} run={run} busy={busy} client={client} hostId={hostId} />}
       {actions !== null && <div className="ro-row" style={{ marginTop: 12 }}>{actions}</div>}
-    </div>
+    </article>
   )
 }
 

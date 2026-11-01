@@ -105,6 +105,8 @@ export const commandSchema = z.discriminatedUnion('type', [
       persona: z.enum(PERSONA_STYLES).optional(),
       /** IANA zone; null follows the Host machine; omitted keeps the current setting. */
       timeZone: z.string().max(64).refine(isTimeZone, 'unknown time zone').nullable().optional(),
+      /** Omitted keeps the current setting. */
+      autoEvidence: z.boolean().optional(),
     }),
   }),
   z.object({ ...envelope, type: z.literal('AllowAgentReview'), hostId: id, payload: z.object({ questId: id, allow: z.boolean() }) }),

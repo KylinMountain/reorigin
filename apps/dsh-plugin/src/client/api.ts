@@ -1,8 +1,9 @@
 import type { CommandOutcome, CommandType, Dashboard, DataExport, Result } from '@reorigin/application'
 import type { AgentStatus } from '../host/agent.ts'
+import type { Discovery, SourceCandidate } from '../host/discovery.ts'
 import { REMOTE_NAMESPACE, type RemoteMethod } from '../shared/remote.ts'
 
-export type { AgentStatus }
+export type { AgentStatus, Discovery, SourceCandidate }
 
 /** DSH's Connection RPC as the browser half sees it (`ctx.connection.rpc`). */
 export interface Rpc {
@@ -41,6 +42,10 @@ export class ReOriginClient {
 
   async importData(document: unknown): Promise<Result<{ rows: number }>> {
     return await this.call('importData', { document }) as Result<{ rows: number }>
+  }
+
+  async discoverSources(): Promise<Discovery> {
+    return await this.call('discoverSources', {}) as Discovery
   }
 
   async agentStatus(): Promise<AgentStatus> {

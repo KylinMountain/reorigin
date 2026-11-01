@@ -14,6 +14,8 @@ import { SqliteStore, isGitRepository, isGithubRepository, readMergedPulls, rand
 import { githubSlug } from '@reorigin/domain'
 import { REMOTE_METHODS, REMOTE_NAMESPACE } from '../shared/remote.ts'
 import { AgentLink, agentPlugin, type AgentStatus } from './agent.ts'
+import { assetsPlugin } from './assets.ts'
+import { DiscoveryLink, discoveryPlugin, type Discovery } from './discovery.ts'
 
 /** Stable string key `@Remote` writes onto a service prototype (typert-protocol descriptor v1). */
 const REMOTE_METHOD_DESCRIPTOR = '@deepseek-ai/dsh-typert-protocol/remote-methods'
@@ -32,6 +34,7 @@ export default class ReOriginService extends Service {
   private readonly app: ReOriginApp
   private readonly store: SqliteStore
   private readonly agentLink = new AgentLink()
+  private readonly discoveryLink = new DiscoveryLink()
 
   constructor(ctx: Context) {
     super(ctx, 'reorigin')
@@ -44,6 +47,8 @@ export default class ReOriginService extends Service {
     ctx.effect(() => () => store.close(), 'reorigin: close store')
     // Waits for DSH's tools and systemPrompt services; a profile without an agent plane just never mounts it.
     ctx.plugin(agentPlugin(this.app, this.agentLink))
+    ctx.plugin(discoveryPlugin(this.discoveryLink))
+    ctx.plugin(assetsPlugin())
     ctx.effect(() => {
       const beat = (): void => { void this.syncNow().catch(error => console.warn('[reorigin] heartbeat failed:', error)) }
       const first = setTimeout(beat, 3_000)
@@ -68,6 +73,11 @@ export default class ReOriginService extends Service {
     const result = this.app.importData(document)
     if (result.ok) this.store.checkpoint()
     return result
+  }
+
+  /** Repositories the Host's DSH sessions ran in, as one-click grant candidates. */
+  async discoverSources(): Promise<Discovery> {
+    return await this.discoveryLink.discover(this.app.dashboard().consents)
   }
 
   agentStatus(): AgentStatus {

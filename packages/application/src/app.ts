@@ -146,6 +146,8 @@ export interface TickReport {
   readonly nudged: number
   readonly assessed: number
   readonly unlocked: number
+  /** Quests that received evidence from consented sources without the Host submitting it. */
+  readonly tracked: number
   readonly dispatched: number
 }
 
@@ -402,8 +404,11 @@ export class ReOriginApp {
       let proposed = 0
       let nudged = 0
       let growth = { assessed: 0, unlocked: 0 }
+      let tracked = 0
       if (host !== undefined) {
         const preferences = tx.getPreferences(host.id)
+        // The Host's own work counts whenever it happens; quiet hours only silence the System's initiatives.
+        if (preferences.autoEvidence) tracked = this.trackEvidence(tx, host, now)
         const zone = preferences.timeZone ?? undefined
         if (!inQuietHours(this.clock.localHour(now, zone), preferences)) {
           const { proposals, nudges } = detectOpportunities({
@@ -452,8 +457,80 @@ export class ReOriginApp {
         // Growth answers the Host's own settlements, so quiet hours do not hold it back.
         growth = this.advanceGrowth(tx, host, now)
       }
-      return { expired, proposed, nudged, ...growth, dispatched: this.dispatchOutbox(tx, now) }
+      return { expired, proposed, nudged, ...growth, tracked, dispatched: this.dispatchOutbox(tx, now) }
     })
+  }
+
+  /**
+   * Passive input: attach activity a consented source observed after a quest was
+   * accepted to that quest, oldest quest first, each source event at most once.
+   * The evidence is corroborated by the source itself, so it goes through the
+   * same verifier as anything the Host submits; the quest is only submitted and
+   * verified once that verdict would pass, so tracking never fails a quest.
+   */
+  private trackEvidence(tx: Transaction, host: Host, now: string): number {
+    const open = tx.listQuests(host.id)
+      .filter(quest => ['ACCEPTED', 'IN_PROGRESS', 'NEEDS_EVIDENCE'].includes(quest.status) && quest.acceptedAt !== null)
+      .filter(quest => quest.criteria.some(criterion => criterion.kind === 'git_commit' || criterion.kind === 'link'))
+      .sort((a, b) => a.acceptedAt!.localeCompare(b.acceptedAt!))
+    if (open.length === 0) return 0
+    const slugs = new Map(tx.listConsents(host.id).filter(consent => consent.source === 'github_repo').map(consent => [consent.id, consent.scopeRef]))
+    const pool = tx.listWorldEvents(host.id, open[0]!.acceptedAt!).reverse()
+    const used = tx.corroboratedEventIds(host.id)
+    const causation = 'system:tracker'
+    let tracked = 0
+    for (const quest of open) {
+      const held = tx.getEvidence(quest.evidenceIds)
+      const added: Evidence[] = []
+      for (const criterion of quest.criteria) {
+        const source = criterion.kind === 'git_commit' ? 'git_repo' : criterion.kind === 'link' ? 'github_repo' : null
+        if (source === null) continue
+        let missing = criterion.minCount - held.filter(item => item.kind === criterion.kind).length - added.filter(item => item.kind === criterion.kind).length
+        for (const event of pool) {
+          if (missing <= 0) break
+          if (event.source !== source || used.has(event.id) || event.observedAt < quest.acceptedAt!) continue
+          const slug = slugs.get(event.consentId)
+          if (source === 'github_repo' && slug === undefined) continue
+          const ref = source === 'git_repo' ? event.externalId : `https://github.com/${slug!}/pull/${event.externalId.slice(3)}`
+          added.push(recordEvidence({
+            id: this.ids.next('ev'),
+            hostId: host.id,
+            kind: criterion.kind,
+            ref,
+            summary: event.summary,
+            observedAt: event.observedAt,
+            recordedAt: now,
+            contentHash: contentHash(criterion.kind, ref, ''),
+            attested: false,
+            corroboratedBy: event.id,
+          }))
+          used.add(event.id)
+          missing -= 1
+        }
+      }
+      if (added.length === 0) continue
+      for (const item of added) tx.insertEvidence(item)
+      let current = attachEvidence(quest, added.map(item => item.id))
+      this.emit(tx, 'quest.evidence_submitted.v1', quest.id, { evidenceIds: added.map(item => item.id), tracked: true }, causation)
+      tracked += 1
+      const counted = tx.countedEvidenceHashes(host.id, quest.id)
+      const verdict = verifyQuest(current, tx.getEvidence(current.evidenceIds), counted)
+      if (verdict.verdict !== 'pass') {
+        // Not enough yet: keep collecting without a verdict the Host would have to undo.
+        if (current.status === 'ACCEPTED') this.move(tx, current, 'IN_PROGRESS', causation)
+        else tx.updateQuest({ ...current, revision: current.revision + 1 }, quest.revision)
+        continue
+      }
+      if (current.status === 'ACCEPTED') current = this.move(tx, current, 'IN_PROGRESS', causation)
+      current = this.move(tx, current, 'SUBMITTED', causation)
+      current = this.move(tx, current, 'VERIFYING', causation)
+      const verification: StoredVerification = { ...verdict, id: this.ids.next('ver'), verifiedAt: now }
+      tx.insertVerification(verification)
+      this.emit(tx, 'quest.verified.v1', quest.id, { verdict: verification.verdict, ruleVersion: verification.ruleVersion }, causation)
+      this.move(tx, current, 'COMPLETED', causation)
+      this.emit(tx, 'quest.completed.v1', quest.id, { verificationId: verification.id, tracked: true }, causation)
+    }
+    return tracked
   }
 
   private emit(tx: Transaction, type: EventType, aggregateId: string, payload: unknown, causationId: string): void {
@@ -605,7 +682,14 @@ export class ReOriginApp {
         const retracted = tx.listCorrections(host.id).some(correction => correction.questId === event.aggregateId)
         if (quest !== undefined && !retracted) {
           tx.insertMemory({ id: this.ids.next('mem'), hostId: host.id, kind: 'milestone', text: `完成了「${quest.title}」${quest.skill === '' ? '' : `（${quest.skill}）`}`, sourceRef: quest.id, createdAt: now, forgottenAt: null })
+          if (payload.tracked === true) notice('tracked', '【任务达成】', `「${quest.title}」已由授权数据源自动核验通过，奖励 ${quest.reward.xp} XP 待领取。`, `tracked-done:${quest.id}`)
         }
+        return
+      }
+      case 'quest.evidence_submitted.v1': {
+        if (payload.tracked !== true) return
+        const count = Array.isArray(payload.evidenceIds) ? payload.evidenceIds.length : 0
+        notice('tracked', '【自动取证】', `系统从授权数据源为「${tx.getQuest(event.aggregateId)?.title ?? '任务'}」记录了 ${count} 份证据。`, `tracked:${event.eventId}`)
         return
       }
       case 'quest.proposed.v1': {
@@ -718,11 +802,13 @@ export class ReOriginApp {
         return { type: 'RevokeConsent', consent: revoked, deletedEvents }
       }
       case 'UpdatePreferences': {
+        const current = tx.getPreferences(host.id)
         const preferences: Preferences = {
           quietHours: command.payload.quietHours,
           systemProposalsPerDay: command.payload.systemProposalsPerDay,
-          persona: command.payload.persona ?? tx.getPreferences(host.id).persona,
-          timeZone: command.payload.timeZone === undefined ? tx.getPreferences(host.id).timeZone : command.payload.timeZone,
+          persona: command.payload.persona ?? current.persona,
+          timeZone: command.payload.timeZone === undefined ? current.timeZone : command.payload.timeZone,
+          autoEvidence: command.payload.autoEvidence ?? current.autoEvidence,
         }
         tx.setPreferences(host.id, preferences)
         emit('preferences.updated.v1', host.id, preferences)

@@ -11,7 +11,7 @@
 // (packages/client/tsdown.client.ts); this reproduces only the subset we use:
 // no CSS modules, no assets, no split chunks.
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -69,7 +69,7 @@ writeFileSync(join(DIST, 'package.json'), `${JSON.stringify({
   type: 'module',
   main: 'host.js',
   exports: { '.': './host.js', './client': './client.js', './package.json': './package.json' },
-  files: ['host.js', 'client.js', 'cordis.patch.yml'],
+  files: ['host.js', 'client.js', 'cordis.patch.yml', 'assets'],
   peerDependencies: { '@deepseek-ai/cordis': '*', '@deepseek-ai/dsh-tools': '*', '@deepseek-ai/dsh-typert-protocol': '*' },
   engines: { dsh: '>=0.2.1-rc.5 <0.3.0' },
   dsh: {
@@ -81,6 +81,7 @@ writeFileSync(join(DIST, 'package.json'), `${JSON.stringify({
   },
 }, null, 2)}\n`)
 
+cpSync(join(ROOT, 'assets'), join(DIST, 'assets'), { recursive: true })
 writeFileSync(join(DIST, 'cordis.patch.yml'), `- insert:\n    - id: reorigin\n      name: ${PACKAGE_NAME}\n`)
 
 console.log(`built ${PACKAGE_NAME}@${version} → ${DIST}`)

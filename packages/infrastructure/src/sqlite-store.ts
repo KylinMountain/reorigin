@@ -91,6 +91,9 @@ function createTransaction(db: DatabaseSync): Transaction {
       if (evidenceIds.length === 0) return []
       return all(`SELECT * FROM evidence WHERE id IN (${evidenceIds.map(() => '?').join(', ')}) ORDER BY recorded_at, id`, ...evidenceIds).map(toEvidence)
     },
+    corroboratedEventIds(hostId) {
+      return new Set(all('SELECT corroborated_by AS id FROM evidence WHERE host_id = ? AND corroborated_by IS NOT NULL', hostId).map(row => String(row.id)))
+    },
     countedEvidenceHashes(hostId, exceptQuestId) {
       const rows = all(`SELECT e.content_hash AS hash FROM verifications v
                           JOIN json_each(v.accepted_evidence_ids_json) j
